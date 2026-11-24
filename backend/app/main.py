@@ -3,16 +3,33 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Cookie, Depends
+from fastapi import (
+    FastAPI,
+    File,
+    UploadFile,
+    HTTPException,
+    Cookie,
+    Depends,
+    Header,
+    Request,
+    Response,
+)
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+import hashlib
+import hmac
+import logging
 import os
+import re
+import secrets
 import uuid
 import json
 from pathlib import Path
 from typing import Optional, AsyncGenerator
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from starlette.types import ASGIApp, Receive, Scope, Send
 from app.services.embedding_service import EmbeddingService
 from app.utils.document_processor import DocumentProcessor
 from app.services.vector_store import VectorStore
@@ -32,14 +49,38 @@ app = FastAPI(
     openapi_url=None,  # Disable /openapi.json
 )
 
-# CORS middleware
+# CORS: only needed when the frontend is served from a different origin than
+# the API. In production the API serves the frontend itself, and in development
+# the Vite proxy keeps requests same-origin, so the default list is minimal.
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "X-Admin-Token"],
 )
+
+logger = logging.getLogger("philosearch")
+
+
+def _generation_error_message(e: Exception) -> str:
+    """User-facing message for a failed answer stream (details go to the log)."""
+    logger.error("Generation failed: %s", e)
+    text = str(e)
+    if any(code in text for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")):
+        return "The AI model is busy right now. Please try again in a moment."
+    return "Something went wrong while generating the answer. Please try again."
+
+
+def _internal_error(e: Exception) -> HTTPException:
+    """Log the real error server-side; give the client a generic message."""
+    logger.exception("Request failed: %s", e)
+    return HTTPException(status_code=500, detail="Internal server error. Please try again.")
 
 # Initialize services
 embedding_service = EmbeddingService()
@@ -48,13 +89,212 @@ vector_store = VectorStore()
 reranker = CrossEncoderReranker()  # Initialize reranker for 2-stage retrieval
 
 
-# --- Auth Dependency ---
+# --- Auth ---
+
+# Session cookie issued by /validate-creator. It is HttpOnly and signed, so it
+# cannot be forged or set from the browser; the frontend's own "creator_auth"
+# cookie is only a hint for whether to show the access prompt.
+SESSION_COOKIE = "philosearch_session"
+SESSION_TTL_SECONDS = 24 * 60 * 60
 
 
-async def require_auth(creator_auth: str | None = Cookie(default=None)):
-    """Require valid auth cookie to access protected endpoints."""
-    if creator_auth != "true":
+def _session_secret() -> bytes:
+    """
+    Key for signing session cookies. AUTH_SECRET if set; otherwise derived from
+    the server's own secrets so sessions survive restarts; otherwise random
+    (sessions then reset when the server restarts).
+    """
+    explicit = os.getenv("AUTH_SECRET")
+    if explicit:
+        return explicit.encode()
+    creator = os.getenv("CREATOR_NAME", "")
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    if creator and api_key:
+        return hashlib.sha256(f"philosearch-session|{creator}|{api_key}".encode()).digest()
+    return secrets.token_bytes(32)
+
+
+SESSION_SECRET = _session_secret()
+
+
+def _sign(expires_at: int) -> str:
+    return hmac.new(SESSION_SECRET, str(expires_at).encode(), hashlib.sha256).hexdigest()
+
+
+def _new_session_token() -> str:
+    expires_at = int(time.time()) + SESSION_TTL_SECONDS
+    return f"{expires_at}.{_sign(expires_at)}"
+
+
+_SESSION_TOKEN = re.compile(r"(\d{1,12})\.([0-9a-f]{64})")
+
+
+def _session_is_valid(token: Optional[str]) -> bool:
+    match = _SESSION_TOKEN.fullmatch(token or "")
+    if not match:
+        return False
+    expires_at = int(match.group(1))
+    if expires_at < time.time():
+        return False
+    return hmac.compare_digest(match.group(2).encode(), _sign(expires_at).encode())
+
+
+def _admin_token_is_valid(supplied: Optional[str]) -> bool:
+    admin_token = os.getenv("ADMIN_TOKEN", "")
+    if not admin_token or not supplied:
+        return False
+    # HTTP headers arrive decoded as latin-1; re-encoding that way recovers the
+    # exact bytes the client sent, so a UTF-8 token compares correctly
+    try:
+        supplied_bytes = supplied.encode("latin-1")
+    except UnicodeEncodeError:
+        supplied_bytes = supplied.encode("utf-8")
+    return hmac.compare_digest(supplied_bytes, admin_token.encode("utf-8"))
+
+
+async def require_auth(
+    philosearch_session: str | None = Cookie(default=None),
+):
+    """Require a valid session cookie (issued by /validate-creator)."""
+    if not _session_is_valid(philosearch_session):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+async def require_admin(x_admin_token: str | None = Header(default=None)):
+    """
+    Require the X-Admin-Token header for endpoints that change the corpus or
+    accept uploads. Disabled entirely unless ADMIN_TOKEN is set.
+    """
+    if not os.getenv("ADMIN_TOKEN", ""):
+        raise HTTPException(
+            status_code=403,
+            detail="Document management is disabled. Set ADMIN_TOKEN to enable it.",
+        )
+    if not _admin_token_is_valid(x_admin_token):
+        raise HTTPException(status_code=403, detail="Invalid admin token")
+
+
+# Admin routes accept uploads. FastAPI reads the whole request body before it
+# runs dependencies, so the token and size are checked here, before the body
+# is received, to stop anonymous multi-GB uploads.
+def _max_upload_mb() -> int:
+    raw = os.getenv("MAX_UPLOAD_MB", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    if raw:
+        print(f"⚠️  Ignoring invalid MAX_UPLOAD_MB={raw!r}; using 50")
+    return 50
+
+
+MAX_UPLOAD_BYTES = _max_upload_mb() * 1024 * 1024
+# The request body also carries multipart boundaries and headers
+_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+# Every other route takes small JSON bodies; the largest legitimate one is a
+# /generate call echoing back search results. Without a cap, FastAPI would
+# read an arbitrarily large body into memory before validating it.
+MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
+_ADMIN_ROUTES = {("POST", "/index"), ("POST", "/index-distributed"), ("POST", "/embed")}
+
+
+class AdminGateMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "http":
+            # Match the path the router sees: without any proxy root_path prefix
+            path = scope["path"]
+            root_path = scope.get("root_path", "")
+            if root_path and path.startswith(root_path):
+                path = path[len(root_path):]
+            method, path = scope["method"], path.rstrip("/") or "/"
+            is_admin = (method, path) in _ADMIN_ROUTES or (
+                method == "DELETE" and path.startswith("/documents/")
+            )
+            if is_admin:
+                headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
+                status, detail = None, None
+                if not os.getenv("ADMIN_TOKEN", ""):
+                    status, detail = 403, "Document management is disabled. Set ADMIN_TOKEN to enable it."
+                elif not _admin_token_is_valid(headers.get("x-admin-token")):
+                    status, detail = 403, "Invalid admin token"
+                else:
+                    length = headers.get("content-length", "")
+                    if length.isdigit() and int(length) > MAX_UPLOAD_BYTES + _MULTIPART_OVERHEAD_BYTES:
+                        status, detail = 413, _too_large_message()
+                if status:
+                    response = JSONResponse({"detail": detail}, status_code=status)
+                    await response(scope, receive, send)
+                    return
+                # No (or a small) Content-Length, e.g. chunked: count the bytes
+                # as they arrive and stop reading once over the limit
+                receive = _limited_receive(receive, MAX_UPLOAD_BYTES + _MULTIPART_OVERHEAD_BYTES)
+            else:
+                headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
+                length = headers.get("content-length", "")
+                if length.isdigit() and int(length) > MAX_JSON_BODY_BYTES:
+                    response = JSONResponse({"detail": "Request body too large"}, status_code=413)
+                    await response(scope, receive, send)
+                    return
+                receive = _limited_receive(receive, MAX_JSON_BODY_BYTES)
+        await self.app(scope, receive, send)
+
+
+def _too_large_message() -> str:
+    return f"Upload too large (limit {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)"
+
+
+def _limited_receive(receive: Receive, limit: int) -> Receive:
+    received = 0
+
+    async def wrapped():
+        nonlocal received
+        message = await receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > limit:
+                raise HTTPException(status_code=413, detail="Request body too large")
+        return message
+
+    return wrapped
+
+
+app.add_middleware(AdminGateMiddleware)
+
+
+# --- Uploads ---
+
+ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".docx"}
+
+
+def _upload_name_and_ext(file: UploadFile) -> tuple[str, str]:
+    """
+    Display name (basename only, never used as a path) and validated extension.
+    """
+    display_name = os.path.basename((file.filename or "upload").replace("\\", "/"))
+    file_ext = os.path.splitext(display_name)[1].lower()
+    if file_ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type. Allowed types: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}",
+        )
+    return display_name, file_ext
+
+
+def _new_upload_path(file_ext: str) -> str:
+    """A random path inside UPLOAD_DIR (never derived from the client's name)."""
+    return os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}{file_ext}")
+
+
+async def _save_upload(file: UploadFile, file_path: str) -> None:
+    """Copy an upload to file_path in chunks, enforcing MAX_UPLOAD_BYTES."""
+    written = 0
+    with open(file_path, "wb") as buffer:
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if written > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail=_too_large_message())
+            buffer.write(chunk)
 
 
 # Initialize distributed ingestion pipeline only if ENABLE_RAY is set
@@ -80,29 +320,62 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Request models
 class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 5
+    query: str = Field(min_length=1, max_length=2000)
+    top_k: int = Field(default=5, ge=1, le=50)
     deduplicate_paragraphs: bool = True
     use_reranking: bool = False  # Enable 2-stage retrieval with cross-encoder reranking
-    top_k_faiss: int = 30  # Number of candidates from FAISS (stage 1)
-    context_window: int = 2  # Number of paragraphs before/after for context expansion
+    top_k_faiss: int = Field(default=30, ge=1, le=200)  # FAISS candidates (stage 1)
+    context_window: int = Field(default=2, ge=0, le=5)  # Paragraphs before/after
+    doc_ids: Optional[list[str]] = Field(default=None, max_length=200)  # Books to search (None = all)
 
 
 class GenerateRequest(BaseModel):
-    query: str
-    top_k_context: int = 5  # Number of document excerpts to retrieve
+    query: str = Field(min_length=1, max_length=2000)
+    top_k_context: int = Field(default=5, ge=1, le=20)  # Excerpts to retrieve
     use_reranking: bool = True  # Use cross-encoder reranking for better quality
-    top_k_faiss: int = 30  # FAISS candidates (if reranking enabled)
-    context_window: int = 0  # Paragraphs before/after (0 = main paragraph only)
-    temperature: float = 0.7  # Sampling temperature for generation
-    max_output_tokens: int = 8192  # Maximum tokens in generated response
+    top_k_faiss: int = Field(default=30, ge=1, le=200)  # FAISS candidates
+    context_window: int = Field(default=0, ge=0, le=5)  # Paragraphs before/after
+    doc_ids: Optional[list[str]] = Field(default=None, max_length=200)  # Books to search (None = all)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_output_tokens: int = Field(default=8192, ge=1, le=8192)
+
+
+class ResultItem(BaseModel):
+    """One result as returned by /search."""
+
+    doc_id: Optional[str] = None
+    filename: str = Field(min_length=1, max_length=300)
+    author: Optional[str] = Field(default=None, max_length=300)
+    paragraph_idx: int = 0
+    paragraph_text: str = Field(max_length=50_000)
+    excerpt_text: Optional[str] = Field(default=None, max_length=5_000)
+    section_label: Optional[str] = Field(default=None, max_length=300)
+    reranking_score: Optional[float] = None
+    context_paragraphs_before: Optional[list[str]] = None
+    context_paragraphs_after: Optional[list[str]] = None
 
 
 class GenerateFromResultsRequest(BaseModel):
-    query: str
-    results: list  # Pre-fetched search results from /search endpoint
-    temperature: float = 0.7  # Sampling temperature for generation
-    max_output_tokens: int = 8192  # Maximum tokens in generated response
+    query: str = Field(min_length=1, max_length=2000)
+    results: list[ResultItem] = Field(max_length=50)  # Pre-fetched results from /search
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_output_tokens: int = Field(default=8192, ge=1, le=8192)
+
+
+STALE_DOC_IDS_DETAIL = "Some selected books are no longer indexed."
+NO_BOOKS_SELECTED_DETAIL = "Select at least one book to search."
+
+
+def _require_known_doc_ids(doc_ids: Optional[list[str]]) -> None:
+    """
+    Reject a selection that names books no longer in the index (e.g. the page
+    was loaded before a re-index), instead of silently searching fewer books.
+    The frontend reloads its book list when it sees this detail.
+    """
+    if doc_ids is not None and not doc_ids:
+        raise HTTPException(status_code=404, detail=NO_BOOKS_SELECTED_DETAIL)
+    if doc_ids and any(doc_id not in vector_store.documents for doc_id in doc_ids):
+        raise HTTPException(status_code=404, detail=STALE_DOC_IDS_DETAIL)
 
 
 @app.get("/health")
@@ -111,13 +384,16 @@ async def health():
 
 
 class ValidateCreatorRequest(BaseModel):
-    answer: str
+    answer: str = Field(max_length=200)
 
 
 @app.post("/validate-creator")
-async def validate_creator(request: ValidateCreatorRequest):
+async def validate_creator(
+    request: ValidateCreatorRequest, http_request: Request, response: Response
+):
     """
-    Validate the creator's name against the stored environment variable.
+    Validate the creator's name against the stored environment variable and,
+    if it matches, issue the signed session cookie that protected endpoints check.
 
     Args:
         answer: The user's answer to the creator question
@@ -133,10 +409,21 @@ async def validate_creator(request: ValidateCreatorRequest):
             status_code=500, detail="CREATOR_NAME environment variable not configured"
         )
 
-    return {"valid": user_answer == creator_name}
+    valid = hmac.compare_digest(user_answer.encode(), creator_name.encode())
+    if valid:
+        forwarded_proto = http_request.headers.get("x-forwarded-proto", "")
+        response.set_cookie(
+            SESSION_COOKIE,
+            _new_session_token(),
+            max_age=SESSION_TTL_SECONDS,
+            httponly=True,
+            samesite="lax",
+            secure=http_request.url.scheme == "https" or forwarded_proto == "https",
+        )
+    return {"valid": valid}
 
 
-@app.post("/embed")
+@app.post("/embed", dependencies=[Depends(require_admin)])
 async def embed_document(file: UploadFile = File(...)):
     """
     Upload a document (PDF, TXT, MD, or DOCX) and get sentence-level embeddings.
@@ -152,26 +439,18 @@ async def embed_document(file: UploadFile = File(...)):
         - embeddings: List of embedding vectors for each sentence
         - embedding_dimension: Dimension of each embedding vector
     """
-    # Validate file type
-    allowed_extensions = {".pdf", ".txt", ".md", ".docx"}
-    file_ext = os.path.splitext(file.filename)[1].lower()
-
-    if file_ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type. Allowed types: {', '.join(allowed_extensions)}",
-        )
+    display_name, file_ext = _upload_name_and_ext(file)
 
     file_path = None
     try:
         # Save uploaded file temporarily
-        file_path = os.path.join(UPLOAD_DIR, file.filename)
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
+        file_path = _new_upload_path(file_ext)
+        await _save_upload(file, file_path)
 
         # Extract text from document
-        text = document_processor.extract_text(file_path, file_ext)
+        text = await run_in_threadpool(
+            document_processor.extract_text, file_path, file_ext
+        )
 
         if not text.strip():
             raise HTTPException(
@@ -179,19 +458,16 @@ async def embed_document(file: UploadFile = File(...)):
             )
 
         # Generate sentence-level embeddings
-        sentences, paragraph_indices, embeddings = embedding_service.embed_by_sentence(
-            text, document_processor
+        sentences, paragraph_indices, embeddings = await run_in_threadpool(
+            embedding_service.embed_by_sentence, text, document_processor
         )
-
-        # Clean up uploaded file
-        os.remove(file_path)
 
         # Calculate paragraph count (max index + 1)
         paragraph_count = max(paragraph_indices) + 1 if paragraph_indices else 0
 
         return JSONResponse(
             content={
-                "filename": file.filename,
+                "filename": display_name,
                 "file_type": file_ext,
                 "text_length": len(text),
                 "sentence_count": len(sentences),
@@ -203,14 +479,17 @@ async def embed_document(file: UploadFile = File(...)):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        # Clean up file if it exists
+        raise _internal_error(e)
+    finally:
+        # Always remove the temporary upload
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/index")
+@app.post("/index", dependencies=[Depends(require_admin)])
 async def index_document(file: UploadFile = File(...)):
     """
     Upload and index a document for semantic search.
@@ -222,51 +501,46 @@ async def index_document(file: UploadFile = File(...)):
         - sentence_count: Number of sentences indexed
         - paragraph_count: Number of paragraphs detected
     """
-    # Validate file type
-    allowed_extensions = {".pdf", ".txt", ".md", ".docx"}
-    file_ext = os.path.splitext(file.filename)[1].lower()
-
-    if file_ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type. Allowed types: {', '.join(allowed_extensions)}",
-        )
+    display_name, file_ext = _upload_name_and_ext(file)
 
     file_path = None
     try:
         # Save uploaded file temporarily
-        file_path = os.path.join(UPLOAD_DIR, file.filename)
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
+        file_path = _new_upload_path(file_ext)
+        await _save_upload(file, file_path)
 
         # Extract text from document
-        text = document_processor.extract_text(file_path, file_ext)
+        text = await run_in_threadpool(
+            document_processor.extract_text, file_path, file_ext
+        )
 
         if not text.strip():
             raise HTTPException(
                 status_code=400, detail="No text could be extracted from the document"
             )
 
-        # Generate sentence-level embeddings
-        sentences, paragraph_indices, embeddings = embedding_service.embed_by_sentence(
-            text, document_processor
-        )
-
-        # Clean up uploaded file
-        os.remove(file_path)
+        # Split into passages (with section labels) and embed each sentence
+        parsed = await run_in_threadpool(document_processor.parse_document, text)
+        sentences, paragraph_indices = parsed.sentences, parsed.paragraph_indices
+        if not sentences:
+            raise HTTPException(
+                status_code=400, detail="No sentences could be extracted from the document"
+            )
+        embeddings = await run_in_threadpool(embedding_service.embed_texts, sentences)
 
         # Generate unique document ID
         doc_id = str(uuid.uuid4())
 
         # Index in vector store
-        success = vector_store.index_document(
+        success = await run_in_threadpool(
+            vector_store.index_document,
             doc_id=doc_id,
-            filename=file.filename,
+            filename=display_name,
             file_type=file_ext,
             sentences=sentences,
             paragraph_indices=paragraph_indices,
             embeddings=embeddings,
+            paragraph_labels=parsed.paragraph_labels,
         )
 
         if not success:
@@ -277,7 +551,7 @@ async def index_document(file: UploadFile = File(...)):
         return JSONResponse(
             content={
                 "doc_id": doc_id,
-                "filename": file.filename,
+                "filename": display_name,
                 "file_type": file_ext,
                 "sentence_count": len(sentences),
                 "paragraph_count": paragraph_count,
@@ -285,14 +559,17 @@ async def index_document(file: UploadFile = File(...)):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        # Clean up file if it exists
+        raise _internal_error(e)
+    finally:
+        # Always remove the temporary upload
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/index-distributed")
+@app.post("/index-distributed", dependencies=[Depends(require_admin)])
 async def index_document_distributed(file: UploadFile = File(...)):
     """
     Upload and index a document using distributed Ray workers for faster processing.
@@ -316,29 +593,21 @@ async def index_document_distributed(file: UploadFile = File(...)):
             detail="Distributed processing not available. Set ENABLE_RAY=true to enable.",
         )
 
-    # Validate file type
-    allowed_extensions = {".pdf", ".txt", ".md", ".docx"}
-    file_ext = os.path.splitext(file.filename)[1].lower()
-
-    if file_ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type. Allowed types: {', '.join(allowed_extensions)}",
-        )
+    display_name, file_ext = _upload_name_and_ext(file)
 
     file_path = None
     try:
         start_time = time.time()
 
         # Save uploaded file temporarily
-        file_path = os.path.join(UPLOAD_DIR, file.filename)
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
+        file_path = _new_upload_path(file_ext)
+        await _save_upload(file, file_path)
 
         # Extract text from document
         parse_start = time.time()
-        text = document_processor.extract_text(file_path, file_ext)
+        text = await run_in_threadpool(
+            document_processor.extract_text, file_path, file_ext
+        )
         parse_time = time.time() - parse_start
 
         if not text.strip():
@@ -348,31 +617,33 @@ async def index_document_distributed(file: UploadFile = File(...)):
 
         # Split into sentences and paragraphs
         split_start = time.time()
-        sentences, paragraph_indices = (
-            document_processor.split_into_sentences_and_paragraphs(text)
-        )
+        parsed = await run_in_threadpool(document_processor.parse_document, text)
+        sentences, paragraph_indices = parsed.sentences, parsed.paragraph_indices
         split_time = time.time() - split_start
+        if not sentences:
+            raise HTTPException(
+                status_code=400, detail="No sentences could be extracted from the document"
+            )
 
         # Generate embeddings (distributed)
-        embeddings, metrics = distributed_pipeline.process_document(
-            sentences, paragraph_indices
+        embeddings, metrics = await run_in_threadpool(
+            distributed_pipeline.process_document, sentences, paragraph_indices
         )
-
-        # Clean up uploaded file
-        os.remove(file_path)
 
         # Generate unique document ID
         doc_id = str(uuid.uuid4())
 
         # Index in vector store
         index_start = time.time()
-        success = vector_store.index_document(
+        success = await run_in_threadpool(
+            vector_store.index_document,
             doc_id=doc_id,
-            filename=file.filename,
+            filename=display_name,
             file_type=file_ext,
             sentences=sentences,
             paragraph_indices=paragraph_indices,
             embeddings=embeddings,
+            paragraph_labels=parsed.paragraph_labels,
         )
         index_time = time.time() - index_start
 
@@ -385,7 +656,7 @@ async def index_document_distributed(file: UploadFile = File(...)):
         return JSONResponse(
             content={
                 "doc_id": doc_id,
-                "filename": file.filename,
+                "filename": display_name,
                 "file_type": file_ext,
                 "sentence_count": len(sentences),
                 "paragraph_count": paragraph_count,
@@ -402,11 +673,14 @@ async def index_document_distributed(file: UploadFile = File(...)):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        # Clean up file if it exists
+        raise _internal_error(e)
+    finally:
+        # Always remove the temporary upload
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/search")
@@ -419,27 +693,32 @@ async def search_documents(request: SearchRequest):
         top_k: Number of final results to return (default: 5)
         deduplicate_paragraphs: Return only one result per paragraph (default: True)
         use_reranking: Enable 2-stage retrieval with cross-encoder reranking (default: False)
-        top_k_faiss: Number of candidates from FAISS stage (default: 50, only used if use_reranking=True)
+        top_k_faiss: Number of candidates from FAISS stage (default: 30, only used if use_reranking=True)
         context_window: Number of paragraphs before/after for context expansion (default: 2)
 
     Returns:
         List of search results with matched sentences and paragraph context
         If use_reranking=True, also includes reranking_score and timing breakdown
     """
+    _require_known_doc_ids(request.doc_ids)
     try:
         # Generate query embedding
-        query_embedding = embedding_service.embed_texts([request.query])[0]
+        query_embedding = (
+            await run_in_threadpool(embedding_service.embed_texts, [request.query])
+        )[0]
 
         # Choose retrieval method
         if request.use_reranking:
             # 2-stage retrieval: FAISS + cross-encoder reranking
-            results, timing = vector_store.search_with_reranking(
+            results, timing = await run_in_threadpool(
+                vector_store.search_with_reranking,
                 query_text=request.query,
                 query_embedding=query_embedding,
                 reranker=reranker,
                 top_k_faiss=request.top_k_faiss,
                 top_k_paragraphs=request.top_k,
                 context_window=request.context_window,
+                doc_ids=request.doc_ids,
             )
 
             # Convert results to JSON-serializable format (with reranking data)
@@ -451,6 +730,8 @@ async def search_documents(request: SearchRequest):
                     "author": result.author,
                     "paragraph_idx": result.paragraph_idx,
                     "paragraph_text": result.paragraph_text,
+                    "excerpt_text": result.excerpt_text,
+                    "section_label": result.section_label,
                     "reranking_score": (
                         float(result.reranking_score)
                         if result.reranking_score is not None
@@ -487,9 +768,11 @@ async def search_documents(request: SearchRequest):
 
         else:
             # FAISS-only retrieval
-            results = vector_store.search(
+            results = await run_in_threadpool(
+                vector_store.search,
                 query_embedding=query_embedding,
                 top_k=request.top_k,
+                doc_ids=request.doc_ids,
             )
 
             # Convert results to JSON-serializable format
@@ -502,6 +785,8 @@ async def search_documents(request: SearchRequest):
                         "author": result.author,
                         "paragraph_idx": result.paragraph_idx,
                         "paragraph_text": result.paragraph_text,
+                        "excerpt_text": result.excerpt_text,
+                        "section_label": result.section_label,
                     }
                 )
 
@@ -515,7 +800,7 @@ async def search_documents(request: SearchRequest):
             )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e)
 
 
 @app.get("/documents")
@@ -535,6 +820,7 @@ async def list_documents():
                     {
                         "doc_id": doc.doc_id,
                         "filename": doc.filename,
+                        "author": doc.author,
                         "file_type": doc.file_type,
                         "total_sentences": doc.total_sentences,
                         "total_paragraphs": doc.total_paragraphs,
@@ -546,10 +832,10 @@ async def list_documents():
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e)
 
 
-@app.delete("/documents/{doc_id}")
+@app.delete("/documents/{doc_id}", dependencies=[Depends(require_admin)])
 async def delete_document(doc_id: str):
     """
     Delete a document from the index.
@@ -561,7 +847,7 @@ async def delete_document(doc_id: str):
         Success message
     """
     try:
-        success = vector_store.delete_document(doc_id)
+        success = await run_in_threadpool(vector_store.delete_document, doc_id)
 
         if not success:
             raise HTTPException(
@@ -575,7 +861,7 @@ async def delete_document(doc_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e)
 
 
 @app.get("/stats")
@@ -591,10 +877,10 @@ async def get_stats():
         return JSONResponse(content=stats)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e)
 
 
-@app.post("/generate")
+@app.post("/generate", dependencies=[Depends(require_auth)])
 async def generate_from_results(request: GenerateFromResultsRequest):
     """
     Generate an answer from pre-fetched search results.
@@ -618,8 +904,8 @@ async def generate_from_results(request: GenerateFromResultsRequest):
     if generator is None:
         raise HTTPException(
             status_code=503,
-            detail="RAG generation not available. Vertex AI is not configured. "
-            "Please set up .env file with GOOGLE_CLOUD_PROJECT and credentials.",
+            detail="RAG generation not available. Set GOOGLE_API_KEY in backend/.env "
+            "and restart the server.",
         )
 
     try:
@@ -636,16 +922,7 @@ async def generate_from_results(request: GenerateFromResultsRequest):
 
         search_results = []
         for r in request.results:
-            result = SearchResult(
-                doc_id=r.get("doc_id"),
-                filename=r.get("filename"),
-                paragraph_idx=r.get("paragraph_idx"),
-                paragraph_text=r.get("paragraph_text"),
-                reranking_score=r.get("reranking_score"),
-                context_paragraphs_before=r.get("context_paragraphs_before"),
-                context_paragraphs_after=r.get("context_paragraphs_after"),
-            )
-            search_results.append(result)
+            search_results.append(SearchResult(**r.model_dump()))
 
         # Stream generated answer
         async def event_generator() -> AsyncGenerator[str, None]:
@@ -657,6 +934,8 @@ async def generate_from_results(request: GenerateFromResultsRequest):
                         "filename": r.filename,
                         "author": r.author,
                         "paragraph_idx": r.paragraph_idx,
+                        "section_label": r.section_label,
+                        "excerpt": r.excerpt_text or r.paragraph_text,
                         "text": r.paragraph_text,
                         "score": (
                             float(r.reranking_score)
@@ -689,7 +968,7 @@ async def generate_from_results(request: GenerateFromResultsRequest):
                 yield f"data: {json.dumps({'type': 'done', 'data': timing_data})}\n\n"
 
             except Exception as e:
-                error_data = {"message": str(e), "code": "generation_error"}
+                error_data = {"message": _generation_error_message(e), "code": "generation_error"}
                 yield f"data: {json.dumps({'type': 'error', 'data': error_data})}\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -697,13 +976,13 @@ async def generate_from_results(request: GenerateFromResultsRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e)
 
 
 @app.post("/search-and-generate", dependencies=[Depends(require_auth)])
 async def search_and_generate(request: GenerateRequest):
     """
-    Retrieve relevant document excerpts and generate an answer using Gemini 3 Flash.
+    Retrieve relevant document excerpts and generate an answer using Gemini 3.8 Flash.
 
     This endpoint implements RAG (Retrieval-Augmented Generation):
     1. Embeds the query
@@ -714,10 +993,10 @@ async def search_and_generate(request: GenerateRequest):
         query: User's question
         top_k_context: Number of document excerpts to retrieve (default: 5)
         use_reranking: Enable cross-encoder reranking (default: True)
-        top_k_faiss: FAISS candidates for reranking (default: 50)
-        context_window: Paragraphs before/after for context (default: 2)
+        top_k_faiss: FAISS candidates for reranking (default: 30)
+        context_window: Paragraphs before/after for context (default: 0)
         temperature: Generation temperature (default: 0.7)
-        max_output_tokens: Maximum response length (default: 2048)
+        max_output_tokens: Maximum response length (default: 8192)
 
     Returns:
         Server-Sent Events stream with:
@@ -728,43 +1007,52 @@ async def search_and_generate(request: GenerateRequest):
     if generator is None:
         raise HTTPException(
             status_code=503,
-            detail="RAG generation not available. Vertex AI is not configured. "
-            "Please set up .env file with GOOGLE_CLOUD_PROJECT and credentials.",
+            detail="RAG generation not available. Set GOOGLE_API_KEY in backend/.env "
+            "and restart the server.",
         )
+    _require_known_doc_ids(request.doc_ids)
 
     try:
         overall_start = time.time()
 
         # Step 1: Generate query embedding
         embed_start = time.time()
-        query_embedding = embedding_service.embed_texts([request.query])[0]
+        query_embedding = (
+            await run_in_threadpool(embedding_service.embed_texts, [request.query])
+        )[0]
         embed_time = time.time() - embed_start
 
         # Step 2: Retrieve relevant passages
         retrieval_start = time.time()
         if request.use_reranking:
-            results, timing = vector_store.search_with_reranking(
+            results, timing = await run_in_threadpool(
+                vector_store.search_with_reranking,
                 query_text=request.query,
                 query_embedding=query_embedding,
                 reranker=reranker,
                 top_k_faiss=request.top_k_faiss,
                 top_k_paragraphs=request.top_k_context,
                 context_window=request.context_window,
+                doc_ids=request.doc_ids,
             )
             retrieval_time = timing["total_time"]
         else:
-            results = vector_store.search(
+            results = await run_in_threadpool(
+                vector_store.search,
                 query_embedding=query_embedding,
                 top_k=request.top_k_context,
+                doc_ids=request.doc_ids,
             )
             retrieval_time = time.time() - retrieval_start
             timing = {"faiss_time": retrieval_time, "reranking_time": 0}
 
         if not results:
-            raise HTTPException(
-                status_code=404,
-                detail="No relevant documents found. Please index documents first.",
-            )
+            # (an empty doc_ids list is already rejected by _require_known_doc_ids)
+            if request.doc_ids is not None:
+                detail = "No matching passages in the selected books."
+            else:
+                detail = "No relevant documents found. Please index documents first."
+            raise HTTPException(status_code=404, detail=detail)
 
         # Step 3: Stream generated answer
         async def event_generator() -> AsyncGenerator[str, None]:
@@ -776,6 +1064,8 @@ async def search_and_generate(request: GenerateRequest):
                         "filename": r.filename,
                         "author": r.author,
                         "paragraph_idx": r.paragraph_idx,
+                        "section_label": r.section_label,
+                        "excerpt": r.excerpt_text or r.paragraph_text,
                         "text": r.paragraph_text,
                         "score": (
                             float(r.reranking_score)
@@ -812,7 +1102,7 @@ async def search_and_generate(request: GenerateRequest):
                 yield f"data: {json.dumps({'type': 'done', 'data': timing_data})}\n\n"
 
             except Exception as e:
-                error_data = {"message": str(e), "code": "generation_error"}
+                error_data = {"message": _generation_error_message(e), "code": "generation_error"}
                 yield f"data: {json.dumps({'type': 'error', 'data': error_data})}\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -820,7 +1110,7 @@ async def search_and_generate(request: GenerateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e)
 
 
 # --- Serve React Frontend ---
@@ -849,9 +1139,15 @@ async def root():
 @app.get("/{path:path}", include_in_schema=False)
 async def spa_fallback(path: str):
     """Serve index.html for any unmatched routes (SPA client-side routing)."""
-    # First check if it's a static file in dist root (favicon.svg, etc.)
-    file_path = FRONTEND_DIST / path
-    if file_path.exists() and file_path.is_file():
+    # First check if it's a static file inside dist (favicon.svg, etc.). Resolve
+    # the path and refuse anything outside dist ("../../backend/.env").
+    dist_root = FRONTEND_DIST.resolve()
+    try:
+        file_path = (dist_root / path).resolve()
+        is_static_file = file_path.is_relative_to(dist_root) and file_path.is_file()
+    except (ValueError, OSError):  # e.g. a null byte in the URL
+        is_static_file = False
+    if is_static_file:
         return FileResponse(file_path)
     # Otherwise serve index.html for client-side routing
     index_file = FRONTEND_DIST / "index.html"

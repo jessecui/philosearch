@@ -6,7 +6,9 @@ import time
 import os
 import random
 import string
+import atexit
 import shutil
+import tempfile
 import torch
 from typing import Dict, Any
 from app.services.embedding_service import EmbeddingService
@@ -15,11 +17,11 @@ from app.services.vector_store import VectorStore
 from app.utils.document_processor import DocumentProcessor
 
 
-def clear_faiss_data(data_dir: str = "data"):
-    """Clear existing FAISS data directory."""
-    if os.path.exists(data_dir):
-        shutil.rmtree(data_dir)
-    os.makedirs(data_dir, exist_ok=True)
+def scratch_data_dir() -> str:
+    """A throwaway index directory, so the real index in data/ is never touched."""
+    path = tempfile.mkdtemp(prefix="philosearch_bench_")
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
 
 
 def benchmark_ingestion(text: str, batch_size: int = 32) -> Dict[str, Any]:
@@ -68,8 +70,7 @@ def benchmark_ingestion(text: str, batch_size: int = 32) -> Dict[str, Any]:
 
     # Clear FAISS before sequential test
     print("Clearing FAISS data...")
-    clear_faiss_data()
-    vector_store_seq = VectorStore()
+    vector_store_seq = VectorStore(data_dir=scratch_data_dir())
 
     seq_start = time.time()
     seq_embeddings = embedding_service.embed_texts(sentences)
@@ -99,8 +100,7 @@ def benchmark_ingestion(text: str, batch_size: int = 32) -> Dict[str, Any]:
 
     # Clear FAISS before Ray test
     print("Clearing FAISS data...")
-    clear_faiss_data()
-    vector_store_ray = VectorStore()
+    vector_store_ray = VectorStore(data_dir=scratch_data_dir())
 
     # Time Ray initialization and worker setup
     print("Initializing Ray and workers...")
@@ -142,10 +142,6 @@ def benchmark_ingestion(text: str, batch_size: int = 32) -> Dict[str, Any]:
     print(f"Throughput: {core10_throughput:.1f} sentences/sec")
 
     pipeline_10_cores.shutdown()
-
-    # Clear FAISS after benchmark
-    print("\nClearing FAISS data...")
-    clear_faiss_data()
 
     # Calculate metrics (excluding init)
     speedup_excl_init = seq_total_time / core10_total_time
