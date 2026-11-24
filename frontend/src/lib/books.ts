@@ -21,8 +21,8 @@ const BOOKS: Record<string, Omit<BookInfo, "author"> & { author: string }> = {
     tradition: "Existentialism",
     coverColor: "#6b2d2d",
   },
-  Moral_Letters_to_Lucilius: {
-    title: "Moral Letters to Lucilius",
+  Letters_from_a_Stoic: {
+    title: "Letters from a Stoic",
     author: "Seneca",
     date: "c. 65",
     year: 65,
