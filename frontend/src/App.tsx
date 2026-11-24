@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AuthModal } from "@/components/auth-modal";
 import { BookCover } from "@/components/book-cover";
+import { LogoMark } from "@/components/logo-mark";
 import { LibraryPanel, type LibraryDoc } from "@/components/library-panel";
 import { parseAnswer } from "@/lib/answer-format";
 import { API_BASE, errorMessage } from "@/lib/api";
@@ -495,12 +496,7 @@ export default function App() {
               className="flex items-center gap-2 cursor-pointer"
               aria-label="PhiloSearch, start a new search"
             >
-              <span
-                aria-hidden="true"
-                className="w-7 h-7 rounded bg-blue-700 text-white flex items-center justify-center font-serif text-base"
-              >
-                φ
-              </span>
+              <LogoMark />
               <span className="text-[17px] font-semibold text-gray-900 tracking-tight">
                 PhiloSearch
               </span>
