@@ -246,7 +246,7 @@ export default function App() {
               })()}
           </li>
         ));
-        const listClass = "list-outside pl-5 space-y-1.5 my-3 marker:text-gray-500 dark:marker:text-gray-500";
+        const listClass = "list-outside pl-5 space-y-1.5 my-3 marker:text-gray-500 dark:marker:text-zinc-500";
         return block.kind === "ordered" ? (
           <ol key={i} start={block.start} className={cn(listClass, "list-decimal")}>
             {items}
@@ -258,11 +258,11 @@ export default function App() {
         );
       }
       if (block.kind === "rule") {
-        return <hr key={i} className="my-5 border-gray-200 dark:border-gray-800" />;
+        return <hr key={i} className="my-5 border-gray-200 dark:border-zinc-800" />;
       }
       if (block.kind === "heading") {
         return (
-          <p key={i} className={cn(spacing, "font-semibold text-gray-900 dark:text-gray-100")}>
+          <p key={i} className={cn(spacing, "font-semibold text-gray-900 dark:text-zinc-100")}>
             {formatInlineText(block.text)}
           </p>
         );
@@ -271,7 +271,7 @@ export default function App() {
         return (
           <blockquote
             key={i}
-            className={cn(spacing, "border-l-2 border-gray-300 dark:border-gray-700 pl-4 font-serif text-gray-600 dark:text-gray-400")}
+            className={cn(spacing, "border-l-2 border-gray-300 dark:border-zinc-700 pl-4 font-serif text-gray-600 dark:text-zinc-400")}
           >
             {formatInlineText(block.text)}
           </blockquote>
@@ -309,7 +309,7 @@ export default function App() {
           const key = `${keyPrefix}${match.index}`;
           if (matchedText.startsWith("**")) {
             parts.push(
-              <strong key={key} className="font-semibold text-gray-900 dark:text-gray-100">
+              <strong key={key} className="font-semibold text-gray-900 dark:text-zinc-100">
                 {render(matchedText.slice(2, -2), `${key}-`)}
               </strong>,
             );
@@ -488,9 +488,9 @@ export default function App() {
   return (
     <>
       {!isAuthenticated && <AuthModal onAuthenticated={handleAuthenticated} />}
-      <div className="min-h-screen bg-[#f6f7f9] dark:bg-[#0f1216] text-gray-800 dark:text-gray-200">
+      <div className="min-h-screen bg-[#f6f7f9] dark:bg-zinc-950 text-gray-800 dark:text-zinc-200">
         {/* Top bar */}
-        <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+        <header className="bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3">
             <button
               type="button"
@@ -498,14 +498,14 @@ export default function App() {
               className="flex items-center gap-2 cursor-pointer"
             >
               <LogoMark />
-              <span className="text-[17px] font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
+              <span className="text-[17px] font-semibold text-gray-900 dark:text-zinc-100 tracking-tight">
                 PhiloSearch
               </span>
               {/* Spoken name: the visible text plus what the button does */}
               <span className="sr-only">, start a new search</span>
             </button>
-            <span className="hidden sm:block h-5 w-px bg-gray-200 dark:bg-gray-800" aria-hidden="true" />
-            <p className="hidden sm:block text-sm text-gray-500 dark:text-gray-400 truncate">
+            <span className="hidden sm:block h-5 w-px bg-gray-200 dark:bg-zinc-800" aria-hidden="true" />
+            <p className="hidden sm:block text-sm text-gray-500 dark:text-zinc-400 truncate">
               Semantic search and cited answers across classic philosophical texts
             </p>
             <button
@@ -516,7 +516,7 @@ export default function App() {
               className={cn(
                 "ml-auto shrink-0 p-2 rounded-md cursor-pointer",
                 "text-gray-500 hover:text-gray-900 hover:bg-gray-100",
-                "dark:text-gray-400 dark:hover:text-gray-100 dark:hover:bg-gray-800",
+                "dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800",
                 "focus-visible:outline-2 focus-visible:outline-blue-600",
               )}
             >
@@ -554,15 +554,15 @@ export default function App() {
 
           <main className="space-y-4 min-w-0">
             {/* Search */}
-            <section className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 sm:p-5">
+            <section className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg p-4 sm:p-5">
               <form onSubmit={handleSearch} className="space-y-3">
-                <label htmlFor="question" className="block text-sm font-medium text-gray-900 dark:text-gray-100">
+                <label htmlFor="question" className="block text-sm font-medium text-gray-900 dark:text-zinc-100">
                   Ask a question
                 </label>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <div className="relative flex-1">
                     <Search
-                      className="w-4 h-4 text-gray-500 dark:text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                      className="w-4 h-4 text-gray-500 dark:text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
                       aria-hidden="true"
                     />
                     <input
@@ -574,10 +574,10 @@ export default function App() {
                       maxLength={2000}
                       placeholder="e.g. Is suffering necessary for a meaningful life?"
                       className={cn(
-                        "w-full h-10 pl-9 pr-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900",
-                        "text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400",
+                        "w-full h-10 pl-9 pr-3 rounded-md border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-900",
+                        "text-sm text-gray-900 dark:text-zinc-100 placeholder:text-gray-500 dark:placeholder:text-zinc-400",
                         "focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20",
-                        "disabled:bg-gray-50 dark:disabled:bg-gray-800 disabled:text-gray-500",
+                        "disabled:bg-gray-50 dark:disabled:bg-zinc-800 disabled:text-gray-500",
                       )}
                       disabled={isLoading}
                     />
@@ -588,7 +588,7 @@ export default function App() {
                     className={cn(
                       "h-10 px-5 rounded-md text-sm font-medium flex items-center justify-center gap-2 cursor-pointer",
                       "bg-blue-700 text-white hover:bg-blue-800",
-                      "disabled:bg-gray-200 dark:disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed",
+                      "disabled:bg-gray-200 dark:disabled:bg-zinc-800 disabled:text-gray-500 disabled:cursor-not-allowed",
                     )}
                   >
                     Search
@@ -599,7 +599,7 @@ export default function App() {
                 ) : (
                   library.length > 0 &&
                   selectedBooks.size < library.length && (
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                    <p className="text-xs text-gray-500 dark:text-zinc-400">
                       Searching {selectedBooks.size} of {library.length} books.
                     </p>
                   )
@@ -607,15 +607,15 @@ export default function App() {
               </form>
 
               {!answer && !isLoading && (
-                <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
-                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Example questions</p>
+                <div className="mt-4 pt-4 border-t border-gray-100 dark:border-zinc-800">
+                  <p className="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-2">Example questions</p>
                   <div className="flex flex-wrap gap-2">
                     {EXAMPLE_QUESTIONS.map((question) => (
                       <button
                         key={question}
                         type="button"
                         onClick={() => handleExampleClick(question)}
-                        className="px-3 py-1.5 rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-xs text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
+                        className="px-3 py-1.5 rounded-md border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs text-gray-700 dark:text-zinc-300 hover:border-gray-300 dark:hover:border-zinc-700 hover:bg-gray-50 dark:hover:bg-zinc-800 cursor-pointer"
                       >
                         {question}
                       </button>
@@ -629,7 +629,7 @@ export default function App() {
             {isLoading && !answer && (
               <div
                 role="status"
-                className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg px-5 py-4 flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400"
+                className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg px-5 py-4 flex items-center gap-3 text-sm text-gray-600 dark:text-zinc-400"
               >
                 <Loader2 className="w-4 h-4 animate-spin text-blue-700 dark:text-blue-400" aria-hidden="true" />
                 {PHASE_LABELS[loadingPhase]}
@@ -649,12 +649,12 @@ export default function App() {
 
             {/* Answer */}
             {answer && (
-              <section aria-labelledby="answer-heading" className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg">
-                <div className="flex items-center justify-between gap-2 px-5 py-3 border-b border-gray-200 dark:border-gray-800">
-                  <h2 id="answer-heading" className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              <section aria-labelledby="answer-heading" className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg">
+                <div className="flex items-center justify-between gap-2 px-5 py-3 border-b border-gray-200 dark:border-zinc-800">
+                  <h2 id="answer-heading" className="text-sm font-semibold text-gray-900 dark:text-zinc-100">
                     Answer
                   </h2>
-                  <span className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                  <span className="text-xs text-gray-500 dark:text-zinc-400 flex items-center gap-2">
                     {isLoading && (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
                     )}
@@ -662,7 +662,7 @@ export default function App() {
                       `${sources.length} sources from ${citedBooks} ${citedBooks === 1 ? "book" : "books"}`}
                   </span>
                 </div>
-                <div className="px-5 py-4 text-[15px] leading-7 text-gray-800 dark:text-gray-200">
+                <div className="px-5 py-4 text-[15px] leading-7 text-gray-800 dark:text-zinc-200">
                   {formatAnswer(answer)}
                 </div>
               </section>
@@ -670,8 +670,8 @@ export default function App() {
 
             {/* Sources */}
             {answer && sources.length > 0 && (
-              <section aria-labelledby="sources-heading" className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg">
-                <h2 id="sources-heading" className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              <section aria-labelledby="sources-heading" className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg">
+                <h2 id="sources-heading" className="text-sm font-semibold text-gray-900 dark:text-zinc-100">
                   <button
                     type="button"
                     onClick={() => setSourcesExpanded(!sourcesExpanded)}
@@ -680,16 +680,16 @@ export default function App() {
                     className="w-full flex items-center justify-between gap-2 px-5 py-3 cursor-pointer"
                   >
                     <span>
-                      Sources <span className="font-normal text-gray-500 dark:text-gray-400">({sources.length})</span>
+                      Sources <span className="font-normal text-gray-500 dark:text-zinc-400">({sources.length})</span>
                     </span>
                     <ChevronDown
-                      className={cn("w-4 h-4 text-gray-500 dark:text-gray-400 transition-transform", sourcesExpanded && "rotate-180")}
+                      className={cn("w-4 h-4 text-gray-500 dark:text-zinc-400 transition-transform", sourcesExpanded && "rotate-180")}
                       aria-hidden="true"
                     />
                   </button>
                 </h2>
                 {sourcesExpanded && (
-                  <ol id="sources-list" className="border-t border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800">
+                  <ol id="sources-list" className="border-t border-gray-200 dark:border-zinc-800 divide-y divide-gray-100 dark:divide-zinc-800">
                     {sources.map((source, idx) => {
                       const book = bookInfo(source.filename, source.author);
                       const label = formatSectionLabel(source.section_label, source.filename);
@@ -701,34 +701,34 @@ export default function App() {
                           id={`source-${idx + 1}`}
                           className={cn(
                             "px-5 py-4 transition-colors duration-300 scroll-mt-6",
-                            highlightedSource === idx + 1 ? "bg-blue-50/60 dark:bg-blue-500/15" : "bg-white dark:bg-gray-900",
+                            highlightedSource === idx + 1 ? "bg-blue-50/60 dark:bg-blue-500/15" : "bg-white dark:bg-zinc-900",
                           )}
                         >
                           <div className="flex items-start gap-3">
-                            <span className="mt-0.5 w-6 h-6 shrink-0 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-xs font-medium flex items-center justify-center">
+                            <span className="mt-0.5 w-6 h-6 shrink-0 rounded bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 text-xs font-medium flex items-center justify-center">
                               {idx + 1}
                             </span>
                             <div className="flex-1 min-w-0 space-y-2">
                               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                 <BookCover book={book} size="sm" />
-                                <span className="text-sm font-medium text-gray-900 dark:text-gray-100 wrap-anywhere">
+                                <span className="text-sm font-medium text-gray-900 dark:text-zinc-100 wrap-anywhere">
                                   {book.title}
                                 </span>
                                 {book.author && (
-                                  <span className="text-sm text-gray-500 dark:text-gray-400">{book.author}</span>
+                                  <span className="text-sm text-gray-500 dark:text-zinc-400">{book.author}</span>
                                 )}
                                 {label && (
-                                  <span className="text-xs text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 rounded px-1.5 py-0.5 wrap-anywhere">
+                                  <span className="text-xs text-gray-600 dark:text-zinc-400 bg-gray-100 dark:bg-zinc-800 rounded px-1.5 py-0.5 wrap-anywhere">
                                     {label}
                                   </span>
                                 )}
                                 {source.score !== null && (
-                                  <span className="ml-auto text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                                  <span className="ml-auto text-xs text-gray-500 dark:text-zinc-400 tabular-nums">
                                     Relevance {source.score.toFixed(4)}
                                   </span>
                                 )}
                               </div>
-                              <p className="font-serif text-[15px] leading-7 text-gray-700 dark:text-gray-300 whitespace-pre-line">
+                              <p className="font-serif text-[15px] leading-7 text-gray-700 dark:text-zinc-300 whitespace-pre-line">
                                 {expandedPassages.has(idx) ? source.text : excerpt}
                               </p>
                               {canExpand && (
@@ -751,7 +751,7 @@ export default function App() {
             )}
 
             {!answer && !isLoading && !error && (
-              <p className="text-xs text-gray-500 dark:text-gray-400 px-1">
+              <p className="text-xs text-gray-500 dark:text-zinc-400 px-1">
                 Answers cite numbered passages from the selected books. Click a number in the answer to jump to its source.
               </p>
             )}

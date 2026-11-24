@@ -19,7 +19,7 @@ html.dark {
 }
 
 body {
-  @apply bg-[#f6f7f9] text-gray-800 antialiased dark:bg-[#0f1216] dark:text-gray-200;
+  @apply bg-[#f6f7f9] text-gray-800 antialiased dark:bg-zinc-950 dark:text-zinc-200;
 }
 
 #root {
