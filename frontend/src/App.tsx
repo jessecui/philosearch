@@ -570,8 +570,7 @@ export default function App() {
                       "disabled:bg-gray-200 disabled:text-gray-500 disabled:cursor-not-allowed",
                     )}
                   >
-                    {isLoading && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
-                    {isLoading ? "Searching" : "Search"}
+                    Search
                   </button>
                 </div>
                 {noBooksSelected ? (
@@ -635,7 +634,7 @@ export default function App() {
                     Answer
                   </h2>
                   <span className="text-xs text-gray-500 flex items-center gap-2">
-                    {isLoading && loadingPhase === "generating" && (
+                    {isLoading && (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
                     )}
                     {sources.length > 0 &&
