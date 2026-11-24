@@ -4,7 +4,7 @@ Test script for RAG (Retrieval-Augmented Generation) pipeline.
 This script demonstrates the full RAG workflow:
 1. FAISS vector similarity search (fast candidate retrieval)
 2. Cross-encoder reranking (precise relevance scoring)
-3. Gemini 3 Flash generation (grounded answer with citations)
+3. Gemini 3.8 Flash generation (grounded answer with citations)
 """
 
 import sys
@@ -24,7 +24,7 @@ load_dotenv(backend_dir / ".env")
 from app.services.vector_store import VectorStore
 from app.services.embedding_service import EmbeddingService
 from app.services.reranker_service import CrossEncoderReranker
-from app.services.generation_service import VertexAIGenerator
+from app.services.generation_service import GeminiGenerator
 import asyncio
 
 
@@ -33,7 +33,7 @@ async def test_search_and_generate(
     top_k_faiss: int = 50,
     top_n_context: int = 5,
     temperature: float = 0.7,
-    max_output_tokens: int = 2048,
+    max_output_tokens: int = 8192,
 ):
     """
     Test RAG pipeline with streaming generation.
@@ -43,7 +43,7 @@ async def test_search_and_generate(
         top_k_faiss: Number of candidates from FAISS (default: 50)
         top_n_context: Number of excerpts to use for generation (default: 5)
         temperature: Generation temperature (default: 0.7)
-        max_output_tokens: Maximum tokens in response (default: 2048)
+        max_output_tokens: Maximum tokens in response (default: 8192)
     """
     print(f"\n{'='*80}")
     print(f"Testing RAG Pipeline (Retrieval + Generation)")
@@ -64,15 +64,15 @@ async def test_search_and_generate(
     embedding_service = EmbeddingService()
     reranker = CrossEncoderReranker()
 
-    # Initialize generator (may fail if Vertex AI not configured)
+    # Initialize generator (fails if GOOGLE_API_KEY is not set)
     try:
-        generator = VertexAIGenerator(
+        generator = GeminiGenerator(
             temperature=temperature, max_output_tokens=max_output_tokens
         )
     except Exception as e:
-        print(f"\n❌ Error initializing Vertex AI generator: {e}")
+        print(f"\n❌ Error initializing Gemini generator: {e}")
         print("\nTo use generation features:")
-        print("1. Set up .env file with Google Cloud credentials")
+        print("1. Set GOOGLE_API_KEY in backend/.env")
         print("2. See backend/.env.example for configuration")
         return
 
@@ -111,7 +111,7 @@ async def test_search_and_generate(
         query_embedding=query_embedding,
         reranker=reranker,
         top_k_faiss=top_k_faiss,
-        top_n_final=top_n_context,
+        top_k_paragraphs=top_n_context,
         context_window=2,  # Include 2 paragraphs before/after for context
     )
 
@@ -125,9 +125,9 @@ async def test_search_and_generate(
     # Print retrieved excerpts
     print(f"\n  📝 Retrieved Context ({len(results)} excerpts):")
     for i, result in enumerate(results, 1):
-        print(f"\n     [{i}] {result.filename} (¶{result.paragraph_idx})")
+        print(f"\n     [{i}] {result.filename} ({result.section_label or f'passage {result.paragraph_idx}'})")
         print(f"         Relevance: {result.reranking_score:.4f}")
-        preview = result.paragraph_text[:100].replace("\n", " ")
+        preview = (result.excerpt_text or result.paragraph_text)[:100].replace("\n", " ")
         print(f"         Preview: {preview}...")
 
     if not results:
@@ -211,7 +211,7 @@ if __name__ == "__main__":
         "--temperature",
         type=float,
         default=0.7,
-        help="Generation temperature 0.0-1.0 (default: 0.7)",
+        help="Generation temperature 0.0-2.0 (default: 0.7)",
     )
     parser.add_argument(
         "--max-tokens",

@@ -1,14 +1,16 @@
-# Project Philo
+# PhiloSearch
 
 A semantic search and RAG (Retrieval-Augmented Generation) platform for philosophical texts, featuring a Vite + React frontend and FastAPI backend with 2-stage retrieval and AI-powered answers.
 
 ## Features
 
 - 🔍 **Semantic Search**: Sentence embeddings with all-MiniLM-L6-v2 (384-dim)
-- 🎯 **2-Stage Retrieval**: FAISS + cross-encoder reranking (88% vs 62% accuracy, +26pp improvement)
-- 🤖 **RAG Generation**: Gemini 3 Flash streaming answers with source citations
+- 📚 **Book Selection**: Choose which works to search from the Library panel
+- 🎯 **2-Stage Retrieval**: Parent-child FAISS + cross-encoder reranking (nDCG@10 +27.6% over flat search, 88% vs 50% accuracy@1)
+- 🤖 **RAG Generation**: Gemini 3.8 Flash streaming answers with source citations
 - 📄 **Multi-format Support**: PDF, TXT, MD, DOCX
-- ⚡ **Ray Distributed Processing**: 3.96x speedup on 10 cores
+- ⚡ **Ray Distributed Processing**: 3.74x faster embedding than single-threaded CPU (10 workers)
+- 📌 **Structured Citations**: Short 1–3 sentence excerpts labelled by book and section (e.g. "Meditations, Book 6, §49")
 - 🚀 **Automatic Device Detection**: MPS/CUDA/CPU
 
 ## Tech Stack
@@ -19,7 +21,7 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 - **AI/ML**:
   - Embeddings: all-MiniLM-L6-v2 (384-dim, bi-encoder)
   - Reranker: cross-encoder/ms-marco-MiniLM-L-6-v2
-  - Generation: Gemini 3 Flash (1M token context, streaming)
+  - Generation: Gemini 3.8 Flash (1M token context, streaming), falling back to Gemini 3.6 Flash and then Gemini 3.5 Flash when a model is overloaded (503), rate-limited or out of quota (429), unavailable (404), or the connection drops
 - **Distributed Processing**: Ray
 
 ---
@@ -28,15 +30,15 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20.19+ or 22.12+ (required by Vite 7)
 - Python 3.10+
-- Google Cloud account (for Gemini API)
+- A Google AI Studio API key (for Gemini): https://aistudio.google.com/apikey
 
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/jessecui/project-philo.git
-cd project-philo
+git clone https://github.com/jessecui/philosearch.git
+cd philosearch
 
 # Frontend dependencies
 cd frontend
@@ -50,15 +52,22 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment
 
-Create `backend/.env`:
+Copy `backend/.env.example` to `backend/.env` and fill it in:
 
 ```bash
-GOOGLE_API_KEY=your-google-ai-api-key
-CREATOR_NAME=your-name  # For auth modal
-# Optional: ENABLE_RAY=true  # For distributed processing
+GOOGLE_API_KEY=your-google-ai-api-key   # Gemini
+CREATOR_NAME=your-name                  # the name the access prompt asks for
+# Optional:
+# AUTH_SECRET=...     # signs session cookies (derived from the two above if unset)
+# ADMIN_TOKEN=...     # enables upload/delete endpoints (disabled if unset)
+# MAX_UPLOAD_MB=50    # upload size limit for those endpoints, per file (MiB)
+# ALLOWED_ORIGINS=... # browser origins allowed to call the public endpoints (default: http://localhost:5173)
+# ENABLE_RAY=true     # enables /index-distributed
 ```
 
 ### 3. Index the Texts
+
+The index isn't committed (it stores every passage in full), so build it before the first run. Three of the eight texts are still under copyright and aren't included in this repo either; add your own copies to `backend/texts/` under the filenames listed in [Texts](#texts), or index just the public-domain ones.
 
 Index the philosophical texts in `backend/texts/` to create the FAISS vector store:
 
@@ -67,7 +76,7 @@ Index the philosophical texts in `backend/texts/` to create the FAISS vector sto
 python -m app.scripts.index_texts
 ```
 
-This will generate `backend/data/faiss.index` and `backend/data/metadata.json`.
+This will generate `backend/data/faiss.index` and `backend/data/metadata.json`. The new index is built in a staging folder and only replaces the old one if every file indexes successfully. Restart the server afterwards so it loads the new index.
 
 ### 4. Run the Application
 
@@ -81,28 +90,45 @@ npm run dev
 # App at http://localhost:5173
 ```
 
+In development the frontend calls the API through Vite's `/api` proxy (see `frontend/vite.config.ts`). In production, build the frontend (`npm run build`) and the backend serves it from `frontend/dist`. The frontend and API must share an origin: the session cookie is `SameSite=Lax`, so a frontend hosted on a separate domain cannot authenticate. `VITE_API_URL` is only for a same-site path such as a reverse-proxy prefix.
+
 ---
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Health check |
-| `/index` | POST | Index document (single-threaded) |
-| `/index-distributed` | POST | Index document (Ray distributed) |
-| `/search` | POST | Semantic search with optional reranking |
-| `/search-and-generate` | POST | RAG: Retrieve + Generate streaming answer |
-| `/documents` | GET | List indexed documents |
-| `/documents/{doc_id}` | DELETE | Remove document |
-| `/stats` | GET | Vector store statistics |
+| Endpoint | Method | Access | Description |
+|----------|--------|--------|-------------|
+| `/` | GET | Public | Serves the built frontend (or a health message if `frontend/dist` is missing) |
+| `/health` | GET | Public | Health check |
+| `/validate-creator` | POST | Public | Checks the access answer; on success sets the `philosearch_session` cookie |
+| `/search` | POST | Public | Semantic search with optional reranking |
+| `/search-and-generate` | POST | Session | RAG: retrieve and stream a generated answer |
+| `/generate` | POST | Session | Stream an answer from results returned by `/search` |
+| `/documents` | GET | Public | List indexed documents |
+| `/stats` | GET | Public | Vector store statistics |
+| `/index` | POST | Admin | Index an uploaded document |
+| `/index-distributed` | POST | Admin | Index an uploaded document with Ray (`ENABLE_RAY=true`) |
+| `/embed` | POST | Admin | Return sentence embeddings for an uploaded document |
+| `/documents/{doc_id}` | DELETE | Admin | Remove a document |
 
-### Search Parameters
+**Session:** an HttpOnly, signed cookie issued by `/validate-creator`, valid for 24 hours. **Admin:** send `X-Admin-Token: <ADMIN_TOKEN>`; these endpoints return 403 when `ADMIN_TOKEN` is not set.
+
+### Search Parameters (`/search`)
 
 - `query` (required): Search text
 - `use_reranking` (default: false): Enable 2-stage retrieval
-- `top_k` (default: 5): Results to return
-- `top_k_faiss` (default: 30): FAISS candidates for reranking
-- `context_window` (default: 2): Paragraphs before/after for context
+- `top_k` (default: 5, max 50): Results to return
+- `top_k_faiss` (default: 30, max 200): FAISS sentence candidates for reranking
+- `context_window` (default: 2): Paragraphs before/after to include in each result (only with `use_reranking: true`)
+- `doc_ids` (optional): Only search these documents (ids from `GET /documents`); omit to search all. Unknown ids return 404 "Some selected books are no longer indexed."; an empty list returns 404 "Select at least one book to search."
+
+### Generation Parameters (`/search-and-generate`)
+
+- `query` (required)
+- `top_k_context` (default: 5, max 20): Passages to cite (the web app uses 10)
+- `use_reranking` (default: true), `top_k_faiss` (default: 30)
+- `temperature` (default: 0.7), `max_output_tokens` (default: 8192, max 8192)
+- `doc_ids` (optional): Only search these documents. The web app sends the books ticked in its Library panel, and omits the field when every book is ticked. Unknown ids return 404 "Some selected books are no longer indexed."; an empty list returns 404 "Select at least one book to search."
 
 ---
 
@@ -112,6 +138,7 @@ npm run dev
 
 ```bash
 curl -X POST "http://localhost:8000/index" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
   -F "file=@document.pdf"
 ```
 
@@ -123,21 +150,23 @@ curl -X POST "http://localhost:8000/search" \
   -d '{
     "query": "what is consciousness?",
     "use_reranking": true,
-    "top_k": 10,
-    "context_window": 2
+    "top_k": 10
   }'
 ```
 
 ### RAG: Search & Generate Answer
 
 ```bash
-curl -N -X POST "http://localhost:8000/search-and-generate" \
+# 1. Get a session cookie
+curl -c cookies.txt -X POST "http://localhost:8000/validate-creator" \
+  -H "Content-Type: application/json" -d '{"answer": "your-name"}'
+
+# 2. Stream an answer
+curl -N -b cookies.txt -X POST "http://localhost:8000/search-and-generate" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "What is the nature of the Tao?",
-    "top_k_context": 5,
-    "use_reranking": true,
-    "temperature": 0.7
+    "top_k_context": 5
   }'
 ```
 
@@ -145,7 +174,7 @@ curl -N -X POST "http://localhost:8000/search-and-generate" \
 
 ```bash
 # Test retrieval pipeline
-python -m app.scripts.test_search
+python -m app.scripts.test_search "What does the Tao say about water?"
 
 # Test RAG pipeline with pretty output
 python -m app.scripts.test_search_and_generate "How should one cultivate virtue?"
@@ -159,14 +188,17 @@ Server-Sent Events (SSE) streaming:
 
 ```
 // Initial: Retrieved sources
-data: {"type":"sources","data":[{"filename":"Tao_Te_Ching.txt","paragraph_idx":5,"text":"...","score":0.85}]}
+data: {"type":"sources","data":[{"filename":"Tao_Te_Ching__Lao_Tzu.txt","author":"Lao Tzu","paragraph_idx":7,"section_label":"Chapter 8","excerpt":"The supreme good is like water, ...","text":"<full passage>","score":0.97}]}
 
 // Streaming: Tokens as they're generated
 data: {"type":"token","data":"The "}
 data: {"type":"token","data":"Tao "}
 
-// Final: Timing metrics
-data: {"type":"done","data":{"generation_time":2.34,"total_time":2.52}}
+// Final: Timing metrics (/search-and-generate also reports embedding, FAISS and reranking times)
+data: {"type":"done","data":{"embedding_time":0.01,"faiss_time":0.002,"reranking_time":0.13,"retrieval_time":0.14,"generation_time":2.34,"total_time":2.52}}
+
+// On failure, instead of "done"
+data: {"type":"error","data":{"message":"...","code":"generation_error"}}
 ```
 
 ---
@@ -175,42 +207,48 @@ data: {"type":"done","data":{"generation_time":2.34,"total_time":2.52}}
 
 ### Retrieval Quality
 
-Tested on 50 philosophical queries with 100 paragraphs:
+Tested on 50 queries with graded relevance labels over a synthetic 100-paragraph document: 50 closely related utilitarianism variants (the query targets) plus 50 paragraphs on neighbouring topics such as deontology, Kant and Stoicism as distractors:
 
-| Metric | FAISS-only | FAISS + Reranking | Improvement |
-|--------|-----------|------------------|-------------|
-| **Accuracy@1** | 62% | 88% | **+26pp** |
-| **nDCG@10** | 0.760 | 0.899 | **+18.3%** |
-| **MRR** | 0.740 | 0.930 | **+25.6%** |
-| **Query Time** | ~5ms | ~50ms | 10x slower |
+| Metric | Flat search | Parent-child FAISS | Parent-child + Reranking | vs Flat | vs Parent-child |
+|--------|------------|--------------------|--------------------------|---------|-----------------|
+| **Accuracy@1** | 50% | 62% | 88% | **+38pp** | **+26pp** |
+| **nDCG@10** | 0.704 | 0.760 | 0.899 | **+27.6%** | **+18.3%** |
+| **MRR** | 0.659 | 0.740 | 0.930 | **+41.0%** | **+25.6%** |
+
+Reranking adds roughly 30 ms per query on Apple MPS in this eval (see the "Reranked … excerpts in …s" lines in `eval_faiss_cross_encoder_ndcg_output.txt`) (about 0.05–0.5 s on the full corpus, depending on how many candidate excerpts are scored).
 
 ### When to Use Reranking
 
 **Use `use_reranking=true` for:**
 - User-facing search (quality critical)
 - Top-k precision requirements
-- Query time < 500ms acceptable
+- Query time up to ~0.5 s acceptable
 
 **Use `use_reranking=false` for:**
-- Real-time applications (< 50ms)
+- Real-time applications (tens of milliseconds)
 - Broad recall needed
 - Resource-constrained environments
 
 ### Ray Distributed Processing
 
-Tested with 19,900 sentences (10 Ray workers on 12-core Mac):
+Embedding 19,900 sentences with all-MiniLM-L6-v2 on a 12-core Mac (CPU unless noted):
 
-| Method | Time | Throughput | Speedup |
-|--------|------|------------|---------|
-| **Sequential (1 core)** | 29.18s | 682 sent/s | 1.0x |
-| **Ray (10 cores)** | 7.36s | 2,704 sent/s | **3.96x** |
+| Method | Time | Throughput | vs single-threaded |
+|--------|------|------------|--------------------|
+| **Single-threaded CPU** (benchmark baseline) | 29.77s | 669 sent/s | 1.0x |
+| **Multithreaded CPU** (PyTorch default, no Ray) | 11.55s | 1,723 sent/s | 2.6x |
+| **Ray, 10 CPU workers** (excluding 6.6s worker startup) | 7.95s | 2,503 sent/s | **3.74x** (−73.3% latency) |
+| **Ray, 10 CPU workers** (including startup) | 14.57s | 1,366 sent/s | 2.04x (−51.1% latency) |
+| **Apple GPU (MPS), no Ray** | 5.80s | 3,431 sent/s | 5.1x |
 
-**Recommendation:** Use `/index-distributed` for documents with 1000+ sentences.
+The Ray rows are the median of three runs (latency reduction 72.8%, 73.3%, 74.3%); results vary by about ±1 point between runs. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
+
+The benchmark uses 10 workers; `/index-distributed` runs 8. **Recommendation:** Use `/index-distributed` for documents with 1000+ sentences.
 
 ### Run Evaluations
 
 ```bash
-# Test retrieval quality (FAISS vs FAISS+reranking)
+# Test retrieval quality (flat vs parent-child vs parent-child + reranking)
 python -m app.evaluation.eval_faiss_cross_encoder_ndcg
 
 # Test ingestion performance (sequential vs Ray distributed)
@@ -222,17 +260,24 @@ python -m app.evaluation.eval_ray_ingestion_latency
 ## Project Structure
 
 ```
-project-philo/
-├── frontend/src/                       # Vite + React frontend
-│   ├── app/
-│   │   ├── page.tsx                    # Main search interface
-│   │   ├── layout.tsx                  # App layout
-│   │   └── globals.css                 # Global styles
-│   ├── components/
-│   │   ├── auth-modal.tsx              # Authentication modal
-│   │   └── ui/                         # UI components
-│   └── lib/
-│       └── utils.ts                    # Utility functions
+philosearch/
+├── frontend/                           # Vite + React frontend
+│   ├── src/
+│   │   ├── App.tsx                     # Search interface, answer and sources
+│   │   ├── main.tsx                    # Entry point
+│   │   ├── index.css                   # Global styles
+│   │   ├── components/
+│   │   │   ├── auth-modal.tsx          # Access prompt
+│   │   │   ├── library-panel.tsx       # Book picker (which books to search)
+│   │   │   ├── book-cover.tsx          # Generated book covers
+│   │   │   └── ui/                     # UI components
+│   │   └── lib/
+│   │       ├── answer-format.ts        # Renders the answer's Markdown
+│   │       ├── books.ts                # Book titles, dates, cover colours, section labels
+│   │       ├── api.ts                  # API base URL and error helper
+│   │       └── utils.ts                # Utility functions
+│   ├── vite.config.ts                  # Dev proxy: /api -> localhost:8000
+│   └── package.json
 ├── backend/
 │   ├── app/
 │   │   ├── main.py                     # FastAPI endpoints
@@ -240,7 +285,7 @@ project-philo/
 │   │   │   ├── embedding_service.py    # Sentence embeddings
 │   │   │   ├── reranker_service.py     # Cross-encoder reranking
 │   │   │   ├── vector_store.py         # FAISS vector store
-│   │   │   ├── generation_service.py   # Gemini 3 Flash generation
+│   │   │   ├── generation_service.py   # Gemini 3.8 Flash generation
 │   │   │   └── distributed_ingestion.py # Ray parallel processing
 │   │   ├── utils/
 │   │   │   └── document_processor.py   # Text extraction & splitting
@@ -253,10 +298,32 @@ project-philo/
 │   │       └── eval_ray_ingestion_latency.py
 │   ├── data/                           # FAISS index & metadata
 │   ├── texts/                          # Sample philosophical texts
+│   ├── .env.example
 │   └── requirements.txt
-├── package.json
+├── Dockerfile
 └── README.md
 ```
+
+---
+
+## Texts
+
+The library in `backend/texts/` (filenames are `Title__Author_Name.txt`):
+
+| Work | Author | Edition | In repo |
+|------|--------|---------|---------|
+| Tao Te Ching | Lao Tzu | Tr. Stephen Mitchell (1988) | No (copyright) — `Tao_Te_Ching__Lao_Tzu.txt` |
+| Nicomachean Ethics | Aristotle | Tr. F. H. Peters, via [Standard Ebooks](https://standardebooks.org/ebooks/aristotle/nicomachean-ethics/f-h-peters) | Yes |
+| Letters from a Stoic | Seneca | Tr. Robin Campbell (Penguin Classics, 1969), a selection of 42 letters | No (copyright) — `Letters_from_a_Stoic__Seneca.txt` |
+| The Enchiridion | Epictetus | | Yes |
+| Meditations | Marcus Aurelius | | Yes |
+| Self-Reliance | Ralph Waldo Emerson | | Yes |
+| Beyond Good and Evil | Friedrich Nietzsche | | Yes |
+| The Myth of Sisyphus | Albert Camus | Tr. Justin O'Brien (1955) | No (copyright) — `The_Myth_of_Sisyphus__Albert_Camus.txt` |
+
+The copyrighted texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition (public domain in the US) with front matter and endnotes removed. To add a book, save it as plain text with blank lines between paragraphs, run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`.
+
+**Deploying:** an image built from a clean checkout has no index (and no copyrighted texts), so the library starts empty. Supply the texts privately at build time and run `python -m app.scripts.index_texts` before starting the server.
 
 ---
 
@@ -272,13 +339,16 @@ project-philo/
 - Persistent across restarts
 
 **Text Processing:**
-- Sentence tokenization: NLTK punkt
-- Paragraph detection: double newlines (`\n\n`)
-- Automatic filtering of empty content
+- Sentence tokenization: NLTK `punkt_tab`
+- Passages follow each work's own structure (`DocumentProcessor.parse_document`): numbered sections ("XLIX.", "63.") and chapters start new passages; headings ("THE SIXTH BOOK", "Absurd Walls") become section labels instead of indexed text; numbered footnotes are dropped; short fragments (epigraphs, verse lines) join the passage they belong to
+- Citations are the matched sentence plus up to two neighbours from the same passage, within ~300 characters; the reranker scores the candidate windows and each passage is cited once, by its best excerpt. The full passage is available behind "Show full passage"
+- Generation cites only the excerpt; the full passage is sent as background
 
-**Pricing (Gemini 3 Flash):**
-- ~$1.25/1M input tokens, ~$5.00/1M output tokens
-- ~$0.003-0.005 per query
+**Pricing (Gemini 3.8 Flash):**
+- $0.75/1M input tokens, $3.75/1M output tokens (including thinking) through Dec 31, 2026
+- $1.50/1M input tokens, $7.50/1M output tokens from Jan 1, 2027
+- Fallback requests to Gemini 3.6 Flash or 3.5 Flash are billed at that model's rates
+- On the free tier each model has its own small daily request limit (20/day at the time of writing), so the fallback chain also stretches the daily allowance across three models
 
 ---
 
@@ -287,6 +357,12 @@ project-philo/
 **"Gemini generator not initialized"**
 - Check `backend/.env` file exists with `GOOGLE_API_KEY`
 - Get API key from https://aistudio.google.com/apikey
+
+**The access prompt keeps reappearing / "Your session expired"**
+- Sessions last 24 hours. Changing `AUTH_SECRET` signs everyone out; if `AUTH_SECRET` is unset, so does changing `GOOGLE_API_KEY` or `CREATOR_NAME`
+
+**Upload or delete returns 403**
+- Set `ADMIN_TOKEN` in `backend/.env` and send it as the `X-Admin-Token` header
 
 ---
 

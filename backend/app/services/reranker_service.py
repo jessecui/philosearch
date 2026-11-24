@@ -89,6 +89,25 @@ class CrossEncoderReranker:
 
         return reranked, reranking_time
 
+    def score_texts(self, query: str, texts: List[str]) -> Tuple[List[float], float]:
+        """
+        Score each text against the query.
+
+        Args:
+            query: Search query text
+            texts: Candidate texts (e.g. citation excerpts)
+
+        Returns:
+            Tuple of (scores in input order, scoring time in seconds)
+        """
+        if not texts:
+            return ([], 0.0)
+        start_time = time.time()
+        scores = self.model.predict([(query, text) for text in texts])
+        scoring_time = time.time() - start_time
+        print(f"Reranked {len(texts)} excerpts in {scoring_time:.3f}s")
+        return ([float(s) for s in scores], scoring_time)
+
     def score_single_pair(self, query: str, text: str) -> float:
         """
         Score a single query-text pair.
