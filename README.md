@@ -16,39 +16,39 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 ## Architecture
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"fontFamily": "-apple-system, Segoe UI, Helvetica, Arial, sans-serif", "fontSize": "14px", "lineColor": "#94a3b8", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "titleColor": "#334155"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 44, "padding": 14}}}%%
+%%{init: {"theme": "base", "themeVariables": {"fontSize": "15px", "lineColor": "#94a3b8", "textColor": "#64748b", "clusterBkg": "transparent", "clusterBorder": "#94a3b8", "titleColor": "#64748b"}, "flowchart": {"curve": "basis", "nodeSpacing": 45, "rankSpacing": 45, "padding": 20, "wrappingWidth": 400}}}%%
 flowchart TB
-    UI(["<b>Browser</b><br/>question + selected books"])
+    UI(["Browser<br/>question + books"])
 
-    subgraph IDX["INDEXING · OFFLINE"]
-        T["Source texts<br/><small>TXT · PDF · MD · DOCX</small>"] --> P["Parse passages<br/><small>section labels, footnotes dropped</small>"]
-        P --> S["Split sentences<br/><small>NLTK</small>"]
-        S --> E1["Embed sentences<br/><small>all-MiniLM-L6-v2</small>"]
+    subgraph IDX["#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;Indexing (offline)#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;"]
+        T["Source texts<br/>TXT · PDF · MD · DOCX"] --> P["Parse passages<br/>+ section labels"]
+        P --> S["Split sentences<br/>NLTK"]
+        S --> E1["Embed sentences<br/>all-MiniLM-L6-v2"]
     end
 
-    STORE[("<b>Vector store</b><br/><small>FAISS sentence vectors<br/>passages · books · labels</small>")]
+    STORE[("Vector store<br/>FAISS + metadata")]
 
-    subgraph API["FASTAPI · /search-and-generate"]
-        A["Verify session"] --> Q["Embed question<br/><small>all-MiniLM-L6-v2</small>"]
-        Q --> K["Retrieve top 30 sentences<br/><small>within selected books</small>"]
-        K --> X["Build excerpts<br/><small>matched sentence + neighbours</small>"]
-        X --> R["Rerank excerpts<br/><small>ms-marco-MiniLM-L-6-v2</small>"]
-        R --> G["Assemble prompt<br/><small>excerpts to cite, passages as context</small>"]
+    subgraph API["#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;API: /search-and-generate#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;"]
+        A["Verify session"] --> Q["Embed question<br/>all-MiniLM-L6-v2"]
+        Q --> K["Top 30 sentences<br/>in selected books"]
+        K --> X["Build excerpts<br/>sentence + neighbours"]
+        X --> R["Rerank excerpts<br/>ms-marco-MiniLM-L-6-v2"]
+        R --> G["Assemble prompt<br/>excerpts + passages"]
     end
 
-    LLM["Generate answer<br/><small>Gemini 3.8 Flash</small>"]
-    OUT(["<b>Browser</b><br/>streamed answer + citations"])
+    LLM["Generate answer<br/>Gemini 3.8 Flash"]
+    OUT(["Browser<br/>streamed answer<br/>+ cited sources"])
 
     UI --> A
     E1 --> STORE
     K -.- STORE
     X -.- STORE
     G --> LLM
-    R -- "sources" --> OUT
-    LLM -- "tokens" --> OUT
+    R --> OUT
+    LLM --> OUT
 
-    classDef step fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#0f172a
-    classDef model fill:#eff6ff,stroke:#1d4ed8,stroke-width:1.5px,color:#0f172a
+    classDef step fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
+    classDef model fill:#eff6ff,stroke:#2563eb,stroke-width:2px,color:#0f172a
     classDef store fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#0f172a
     classDef client fill:#1d4ed8,stroke:#1d4ed8,color:#ffffff
 
@@ -113,9 +113,7 @@ CREATOR_NAME=your-name                  # the name the access prompt asks for
 
 ### 3. Index the Texts
 
-The index isn't committed (it stores every passage in full), so build it before the first run. Three of the eight texts are still under copyright and aren't included in this repo either; add your own copies to `backend/texts/` under the filenames listed in [Texts](#texts), or index just the public-domain ones.
-
-Index the philosophical texts in `backend/texts/` to create the FAISS vector store:
+Neither the texts nor the index are committed. Add the texts to `backend/texts/` under the filenames listed in [Texts](#texts), then build the FAISS vector store:
 
 ```bash
 # From backend/ directory
@@ -343,7 +341,7 @@ philosearch/
 │   │       ├── eval_faiss_cross_encoder_ndcg.py
 │   │       └── eval_ray_ingestion_latency.py
 │   ├── data/                           # FAISS index & metadata
-│   ├── texts/                          # Sample philosophical texts
+│   ├── texts/                          # Source texts (local, not committed)
 │   ├── .env.example
 │   └── requirements.txt
 ├── Dockerfile
@@ -356,20 +354,20 @@ philosearch/
 
 The library in `backend/texts/` (filenames are `Title__Author_Name.txt`):
 
-| Work | Author | Edition | In repo |
-|------|--------|---------|---------|
-| Tao Te Ching | Lao Tzu | Tr. Stephen Mitchell (1988) | No (copyright) — `Tao_Te_Ching__Lao_Tzu.txt` |
-| Nicomachean Ethics | Aristotle | Tr. F. H. Peters, via [Standard Ebooks](https://standardebooks.org/ebooks/aristotle/nicomachean-ethics/f-h-peters) | Yes |
-| Letters from a Stoic | Seneca | Tr. Robin Campbell (Penguin Classics, 1969), a selection of 42 letters | No (copyright) — `Letters_from_a_Stoic__Seneca.txt` |
-| The Enchiridion | Epictetus | | Yes |
-| Meditations | Marcus Aurelius | | Yes |
-| Self-Reliance | Ralph Waldo Emerson | | Yes |
-| Beyond Good and Evil | Friedrich Nietzsche | | Yes |
-| The Myth of Sisyphus | Albert Camus | Tr. Justin O'Brien (1955) | No (copyright) — `The_Myth_of_Sisyphus__Albert_Camus.txt` |
+| Work | Author | Edition | Filename |
+|------|--------|---------|----------|
+| Tao Te Ching | Lao Tzu | Tr. Stephen Mitchell (1988) | `Tao_Te_Ching__Lao_Tzu.txt` |
+| Nicomachean Ethics | Aristotle | Tr. F. H. Peters, via [Standard Ebooks](https://standardebooks.org/ebooks/aristotle/nicomachean-ethics/f-h-peters) | `Nicomachean_Ethics__Aristotle.txt` |
+| Letters from a Stoic | Seneca | Tr. Robin Campbell (Penguin Classics, 1969), a selection of 42 letters | `Letters_from_a_Stoic__Seneca.txt` |
+| The Enchiridion | Epictetus | | `The_Enchiridion__Epictetus.txt` |
+| Meditations | Marcus Aurelius | | `Meditations__Marcus_Aurelius.txt` |
+| Self-Reliance | Ralph Waldo Emerson | | `Self_Reliance__Ralph_Waldo_Emerson.txt` |
+| Beyond Good and Evil | Friedrich Nietzsche | | `Beyond_Good_and_Evil__Friedrich_Nietzsche.txt` |
+| The Myth of Sisyphus | Albert Camus | Tr. Justin O'Brien (1955) | `The_Myth_of_Sisyphus__Albert_Camus.txt` |
 
-The copyrighted texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition (public domain in the US) with front matter and endnotes removed. To add a book, save it as plain text with blank lines between paragraphs, run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`.
+The texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition with front matter and endnotes removed. To add a book, save it as plain text with blank lines between paragraphs, run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`.
 
-**Deploying:** an image built from a clean checkout has no index (and no copyrighted texts), so the library starts empty. Supply the texts privately at build time and run `python -m app.scripts.index_texts` before starting the server.
+**Deploying:** an image built from a clean checkout has no texts or index, so the library starts empty. Supply the texts at build time and run `python -m app.scripts.index_texts` before starting the server.
 
 ---
 

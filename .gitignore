@@ -63,10 +63,9 @@ backend/uploads/
 backend/data/.staging_*/
 backend/data/metadata.json.old
 
-# Copyrighted texts: kept locally, not redistributed in this public repo
-backend/texts/Letters_from_a_Stoic__Seneca.txt
-backend/texts/Tao_Te_Ching__Lao_Tzu.txt
-backend/texts/The_Myth_of_Sisyphus__Albert_Camus.txt
+# Source texts are kept locally, not committed (the folder itself stays)
+backend/texts/*
+!backend/texts/.gitkeep
 # The index stores every passage in full, so it isn't committed either;
 # build it locally with: python -m app.scripts.index_texts
 backend/data/faiss.index
