@@ -2,7 +2,10 @@
 
 A semantic search and RAG (Retrieval-Augmented Generation) platform for philosophical texts, featuring a Vite + React frontend and FastAPI backend with 2-stage retrieval and AI-powered answers.
 
-![PhiloSearch answering "How should I respond to things outside my control?" with numbered citations to Seneca and Epictetus](docs/screenshot.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img alt="PhiloSearch answering &quot;How should I respond to things outside my control?&quot; with numbered citations to Epictetus, Seneca and Lao Tzu" src="docs/screenshot-light.png">
+</picture>
 
 ## Features
 
