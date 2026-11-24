@@ -9,6 +9,7 @@ import {
 import { Loader2 } from "lucide-react";
 import Cookies from "js-cookie";
 
+import { LogoMark } from "@/components/logo-mark";
 import { API_BASE, errorMessage } from "@/lib/api";
 
 interface AuthModalProps {
@@ -79,12 +80,7 @@ export function AuthModal({ onAuthenticated }: AuthModalProps) {
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg font-semibold text-gray-900">
-            <span
-              aria-hidden="true"
-              className="w-7 h-7 rounded bg-blue-700 text-white flex items-center justify-center font-serif text-base"
-            >
-              φ
-            </span>
+            <LogoMark />
             PhiloSearch
           </DialogTitle>
         </DialogHeader>
