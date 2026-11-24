@@ -77,7 +77,7 @@ def test_search(query: str, top_k_faiss: int = 50, top_n_final: int = 10):
         query_embedding=query_embedding,
         reranker=reranker,
         top_k_faiss=top_k_faiss,
-        top_n_final=top_n_final,
+        top_k_paragraphs=top_n_final,
         context_window=2,  # Include 2 paragraphs before/after for context
     )
 
@@ -102,11 +102,8 @@ def test_search(query: str, top_k_faiss: int = 50, top_n_final: int = 10):
         print(f"Result #{i}")
         print(f"{'─'*80}")
         print(f"📄 Document:          {result.filename}")
-        print(f"📍 Paragraph:         {result.paragraph_idx}")
+        print(f"📍 Section:           {result.section_label or '—'} (passage {result.paragraph_idx})")
         print(f"🎯 Reranking Score:   {result.reranking_score:.4f}")
-        print(
-            f"💬 FAISS Scores:      {[f'{s:.4f}' for s in result.similarity_scores[:3]]}"
-        )
 
         # Show context paragraphs before (if available)
         if result.context_paragraphs_before:
@@ -118,15 +115,11 @@ def test_search(query: str, top_k_faiss: int = 50, top_n_final: int = 10):
                     else f"   {ctx_para}"
                 )
 
-        # Show matched paragraph
-        print(f"\n✨ Matched Paragraph:")
+        # Show the citation excerpt, then the full passage it comes from
+        print(f"\n🔍 Citation Excerpt:")
+        print(f"   {result.excerpt_text}")
+        print(f"\n✨ Full Passage:")
         print(f"   {result.paragraph_text}")
-
-        # Show matched sentences
-        if result.matched_sentences:
-            print(f"\n🔍 Matched Sentences ({len(result.matched_sentences)}):")
-            for j, sentence in enumerate(result.matched_sentences[:3], 1):
-                print(f"   {j}. {sentence}")
 
         # Show context paragraphs after (if available)
         if result.context_paragraphs_after:

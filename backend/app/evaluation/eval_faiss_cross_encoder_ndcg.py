@@ -1,12 +1,13 @@
 """
 Test retrieval precision on a document with many similar paragraphs.
 
-This test evaluates whether the system can distinguish between 30 highly similar
+This test evaluates whether the system can distinguish between 50 highly similar
 paragraphs about utilitarianism variants and retrieve the specific one that
 answers each query.
 
-Key challenge: All paragraphs discuss utilitarianism and share similar vocabulary,
-but each describes a distinct variant. The cross-encoder should excel at finding
+Key challenge: The 50 target paragraphs (0-49) all discuss utilitarianism and share
+similar vocabulary, but each describes a distinct variant; paragraphs 50-99 cover
+neighbouring topics (deontology, Kant, Stoicism, metaethics) as distractors. The cross-encoder should excel at finding
 the exact paragraph with the specific detail being asked about.
 """
 
@@ -15,10 +16,13 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from app.services.vector_store import VectorStore
+from app.services.vector_store import VectorStore, SearchResult
 from app.services.embedding_service import EmbeddingService
 from app.services.reranker_service import CrossEncoderReranker
 import math
+
+import faiss
+import numpy as np
 from typing import Dict, List, Tuple
 
 
@@ -343,15 +347,14 @@ def ingest_document():
     # Initialize services
     embedding_service = EmbeddingService()
 
-    # Clear existing data to ensure clean test
+    # Use a throwaway directory so the real index in data/ is never touched
+    import atexit
     import shutil
+    import tempfile
 
-    data_dir = "data"
-    if os.path.exists(data_dir):
-        shutil.rmtree(data_dir)
-    os.makedirs(data_dir, exist_ok=True)
-
-    vector_store = VectorStore()
+    scratch_dir = tempfile.mkdtemp(prefix="philosearch_eval_")
+    atexit.register(shutil.rmtree, scratch_dir, ignore_errors=True)
+    vector_store = VectorStore(data_dir=scratch_dir)
 
     # Process document
     from app.utils.document_processor import DocumentProcessor
@@ -377,7 +380,18 @@ def ingest_document():
     )
 
     print(f"✓ Ingested document with {len(sentences)} sentences\n")
-    return vector_store
+    # Flat baseline: one embedding per whole paragraph, no sentence hierarchy
+    num_paragraphs = max(paragraph_indices) + 1
+    paragraph_texts = [
+        vector_store.paragraph_cache[("philosophy_util", i)]
+        for i in range(num_paragraphs)
+    ]
+    flat_index = faiss.IndexFlatL2(vector_store.embedding_dim)
+    flat_index.add(
+        np.array(embedding_service.embed_texts(paragraph_texts), dtype=np.float32)
+    )
+
+    return vector_store, flat_index
 
 
 def calculate_ndcg(
@@ -435,21 +449,29 @@ def calculate_mrr(
     return 0.0
 
 
-def run_test(vector_store: VectorStore, use_reranking: bool = False):
+METHODS = {
+    "flat": "Flat Search (whole-paragraph embeddings)",
+    "parent_child": "Parent-Child FAISS (sentence -> paragraph)",
+    "parent_child_rerank": "Parent-Child FAISS + Cross-Encoder Reranking",
+}
+
+
+def run_test(vector_store: VectorStore, flat_index, mode: str):
     """
     Run retrieval test on philosophy document paragraphs.
 
     Args:
         vector_store: Initialized vector store with philosophy document
-        use_reranking: Whether to use cross-encoder reranking
+        flat_index: FAISS index of whole-paragraph embeddings (flat baseline)
+        mode: One of METHODS keys
     """
-    method = "FAISS + Cross-Encoder Reranking" if use_reranking else "FAISS Only"
+    method = METHODS[mode]
     print(f"\n{'=' * 80}")
     print(f"Testing: {method}")
     print(f"{'=' * 80}\n")
 
     embedding_service = EmbeddingService()
-    reranker = CrossEncoderReranker() if use_reranking else None
+    reranker = CrossEncoderReranker() if mode == "parent_child_rerank" else None
 
     correct = 0
     total = len(TEST_QUERIES)
@@ -475,13 +497,26 @@ def run_test(vector_store: VectorStore, use_reranking: bool = False):
         print(f"  Goal: {description}")
 
         # Search
-        if use_reranking:
+        if mode == "flat":
+            query_embedding = embedding_service.embed_texts([query])[0]
+            _, idx = flat_index.search(np.array([query_embedding], dtype=np.float32), 10)
+            results = [
+                SearchResult(
+                    doc_id="philosophy_util",
+                    filename="eval_philosophy_document.txt",
+                    paragraph_idx=int(i),
+                    paragraph_text=vector_store.paragraph_cache[("philosophy_util", int(i))],
+                )
+                for i in idx[0]
+                if i != -1
+            ]
+        elif mode == "parent_child_rerank":
             # Embed query for reranking search
             query_embedding = embedding_service.embed_texts([query])[0]
             results, _ = vector_store.search_with_reranking(
                 query_text=query,
                 query_embedding=query_embedding,
-                top_k_faiss=30,  # Retrieve all sentences to ensure all 50 paragraphs are candidates
+                top_k_faiss=30,  # Same candidate pool as the app: top 30 sentence hits
                 top_k_paragraphs=10,
                 reranker=reranker,
                 context_window=0,
@@ -556,53 +591,30 @@ def main():
     """Run the philosophy document retrieval test."""
     print("\n" + "=" * 80)
     print("PHILOSOPHY DOCUMENT RETRIEVAL TEST")
-    print("Testing FAISS + Cross-Encoder nDCG on 30 similar utilitarianism paragraphs")
+    print("Flat vs parent-child FAISS vs parent-child + cross-encoder reranking")
     print("=" * 80 + "\n")
 
-    # Ingest document
-    vector_store = ingest_document()
+    vector_store, flat_index = ingest_document()
+    results = {mode: run_test(vector_store, flat_index, mode) for mode in METHODS}
 
-    # Test FAISS only
-    faiss_results = run_test(vector_store, use_reranking=False)
-
-    # Test FAISS + reranking
-    reranking_results = run_test(vector_store, use_reranking=True)
-
-    # Final comparison
     print("\n" + "=" * 80)
     print("COMPARISON")
     print("=" * 80)
-    print(f"FAISS Only:")
-    print(f"  Overall Accuracy:    {faiss_results['accuracy']:.1f}%")
-    print(f"  Overall nDCG@10:     {faiss_results['ndcg@10']:.3f}")
-    print(f"  Overall MRR:         {faiss_results['mrr']:.3f}")
-    print()
-    print(f"FAISS + Reranking:")
-    print(f"  Overall Accuracy:    {reranking_results['accuracy']:.1f}%")
-    print(f"  Overall nDCG@10:     {reranking_results['ndcg@10']:.3f}")
-    print(f"  Overall MRR:         {reranking_results['mrr']:.3f}")
+    for mode, label in METHODS.items():
+        r = results[mode]
+        print(f"{label}:")
+        print(f"  Accuracy@1: {r['accuracy']:.1f}%   nDCG@10: {r['ndcg@10']:.3f}   MRR: {r['mrr']:.3f}")
     print()
 
-    # Calculate improvements (absolute and relative to FAISS baseline)
-    print(f"Overall Improvement:")
-    acc_diff = reranking_results["accuracy"] - faiss_results["accuracy"]
+    def rel(new, old):
+        return (new - old) / old * 100 if old > 0 else 0.0
 
-    # Relative improvement: (reranking - faiss) / faiss * 100
-    ndcg_rel_imp = (
-        (reranking_results["ndcg@10"] - faiss_results["ndcg@10"])
-        / faiss_results["ndcg@10"]
-        * 100
-        if faiss_results["ndcg@10"] > 0
-        else 0.0
-    )
-    mrr_rel_imp = (
-        (reranking_results["mrr"] - faiss_results["mrr"]) / faiss_results["mrr"] * 100
-        if faiss_results["mrr"] > 0
-        else 0.0
-    )
-    print(f"  Accuracy:    {acc_diff:+.1f} pp")
-    print(f"  nDCG@10:     {ndcg_rel_imp:+.1f}% relative improvement")
-    print(f"  MRR:         {mrr_rel_imp:+.1f}% relative improvement")
+    for base in ("flat", "parent_child"):
+        b, f = results[base], results["parent_child_rerank"]
+        print(f"Full system vs {METHODS[base]}:")
+        print(f"  Accuracy@1: {f['accuracy'] - b['accuracy']:+.1f} pp")
+        print(f"  nDCG@10:    {rel(f['ndcg@10'], b['ndcg@10']):+.1f}% relative")
+        print(f"  MRR:        {rel(f['mrr'], b['mrr']):+.1f}% relative")
     print("=" * 80 + "\n")
 
 

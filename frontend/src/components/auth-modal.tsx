@@ -1,12 +1,15 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 import Cookies from "js-cookie";
+
+import { API_BASE, errorMessage } from "@/lib/api";
 
 interface AuthModalProps {
   onAuthenticated: () => void;
@@ -16,37 +19,52 @@ export function AuthModal({ onAuthenticated }: AuthModalProps) {
   const [answer, setAnswer] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // The input is disabled while verifying, which drops focus; give it back
+  // so a mistyped name can be retyped straight away
+  useEffect(() => {
+    if (!isLoading) inputRef.current?.focus();
+  }, [isLoading]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError("");
 
+    let response: Response;
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || "";
-      const response = await fetch(`${apiUrl}/validate-creator`, {
+      response = await fetch(`${API_BASE}/validate-creator`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ answer }),
       });
+    } catch {
+      setError("Network error. Please try again.");
+      setIsLoading(false);
+      return;
+    }
 
+    try {
       if (!response.ok) {
-        throw new Error("Failed to validate answer");
+        throw new Error(await errorMessage(response));
       }
 
       const data = await response.json();
 
       if (data.valid) {
+        // UI hint only, so the prompt isn't shown again on reload. Access is
+        // checked by the server's HttpOnly session cookie set in this response.
         Cookies.set("creator_auth", "true", { expires: 1 });
         onAuthenticated();
       } else {
-        setError("Incorrect answer. Please try again.");
+        setError("That name doesn't match our records. Please try again.");
         setAnswer("");
       }
-    } catch {
-      setError("Network error. Please try again.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setIsLoading(false);
     }
@@ -60,14 +78,29 @@ export function AuthModal({ onAuthenticated }: AuthModalProps) {
         onEscapeKeyDown={(e) => e.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle className="text-xl font-bold text-white">Welcome to Project Philo!</DialogTitle>
+          <DialogTitle className="flex items-center gap-2 text-lg font-semibold text-gray-900">
+            <span
+              aria-hidden="true"
+              className="w-7 h-7 rounded bg-blue-700 text-white flex items-center justify-center font-serif text-base"
+            >
+              φ
+            </span>
+            PhiloSearch
+          </DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <p className="text-sm font-medium text-slate-300">
-              Who created this app?
-            </p>
+            <DialogDescription className="text-sm text-gray-500">
+              A semantic search engine for philosophical texts
+            </DialogDescription>
+            <label
+              htmlFor="creator-question"
+              className="block pt-2 text-sm font-medium text-gray-900"
+            >
+              To continue, enter the name of this project's creator.
+            </label>
             <input
+              ref={inputRef}
               id="creator-question"
               name="creator-question"
               type="text"
@@ -75,26 +108,26 @@ export function AuthModal({ onAuthenticated }: AuthModalProps) {
               onChange={(e) => setAnswer(e.target.value)}
               disabled={isLoading}
               autoComplete="one-time-code"
-              className="w-full px-4 py-3 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 bg-slate-950 text-white placeholder-slate-500 transition-all"
-              placeholder="Enter answer"
+              className="w-full h-10 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:bg-gray-50"
+              placeholder="Full name"
               autoFocus
             />
           </div>
           {error && (
-            <p className="text-sm text-red-400">{error}</p>
+            <p role="alert" className="text-sm text-red-700">{error}</p>
           )}
           <button
             type="submit"
             disabled={isLoading || !answer.trim()}
-            className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-medium transition-colors"
+            className="w-full h-10 rounded-md bg-blue-700 text-white text-sm font-medium hover:bg-blue-800 disabled:bg-gray-200 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
           >
             {isLoading ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Verifying...
+                Verifying…
               </>
             ) : (
-              "Submit"
+              "Continue"
             )}
           </button>
         </form>

@@ -5,8 +5,11 @@ This script processes all text files in the texts/ directory and adds them
 to the FAISS vector store for semantic search using distributed Ray processing.
 """
 
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -69,17 +72,15 @@ def index_texts_directory(
 
     data_path.mkdir(exist_ok=True)
 
-    # Clear existing index
-    print("🗑️  Clearing existing FAISS index...")
+    # Build the new index in a staging folder; the live index in data/ is only
+    # replaced once every file has been indexed, so a failed run leaves the
+    # app with its previous index instead of none
     index_file = data_path / "faiss.index"
     metadata_file = data_path / "metadata.json"
-
-    if index_file.exists():
-        os.remove(index_file)
-        print(f"  ✓ Removed {index_file}")
-    if metadata_file.exists():
-        os.remove(metadata_file)
-        print(f"  ✓ Removed {metadata_file}")
+    staging_path = Path(tempfile.mkdtemp(prefix=".staging_", dir=data_path))
+    # Remove the staging folder however the run ends (including a crash)
+    atexit.register(shutil.rmtree, staging_path, ignore_errors=True)
+    print(f"🧱 Building new index in {staging_path.name}/ (live index untouched)")
 
     # Initialize services
     print(
@@ -90,7 +91,7 @@ def index_texts_directory(
     distributed_pipeline = DistributedIngestionPipeline(
         num_workers=num_workers, batch_size=batch_size
     )
-    vector_store = VectorStore(data_dir=str(data_path))
+    vector_store = VectorStore(data_dir=str(staging_path))
     init_time = time.time() - init_start
     print(f"  ✓ Initialization complete in {init_time:.2f}s")
 
@@ -100,6 +101,7 @@ def index_texts_directory(
     if not text_files:
         print(f"No .txt files found in {texts_path}")
         distributed_pipeline.shutdown()
+        shutil.rmtree(staging_path, ignore_errors=True)
         return
 
     print(f"\n📚 Found {len(text_files)} text file(s) to index:")
@@ -115,6 +117,7 @@ def index_texts_directory(
     total_embedding_time = 0.0
     total_indexing_time = 0.0
     files_processed = 0
+    files_skipped = 0  # empty files: not an error, nothing to index
 
     for text_file in text_files:
         print(f"\n{'='*70}")
@@ -129,17 +132,24 @@ def index_texts_directory(
 
             if not text.strip():
                 print(f"  ⚠️  Skipping empty file: {text_file.name}")
+                files_skipped += 1
                 continue
 
             # Extract sentences using document processor
-            sentences, paragraph_indices = (
-                document_processor.split_into_sentences_and_paragraphs(text)
-            )
+            parsed = document_processor.parse_document(text)
+            sentences, paragraph_indices = parsed.sentences, parsed.paragraph_indices
+            if not sentences:
+                print(f"  ⚠️  Skipping file with no sentences: {text_file.name}")
+                files_skipped += 1
+                continue
             parse_time = time.time() - parse_start
             total_parsing_time += parse_time
 
             print(f"  📝 Parsed {len(sentences)} sentences in {parse_time:.2f}s")
-            print(f"  📄 Detected {max(paragraph_indices) + 1} paragraphs")
+            print(
+                f"  📄 Detected {max(paragraph_indices) + 1} passages "
+                f"({len(parsed.paragraph_labels)} with section labels)"
+            )
 
             # Generate embeddings using distributed pipeline
             print(f"  ⚡ Generating embeddings with {num_workers} workers...")
@@ -152,14 +162,16 @@ def index_texts_directory(
             index_start = time.time()
             print("  💾 Adding to vector store...")
             title, author = parse_filename(text_file.name)
-            doc_id = vector_store.index_document(
-                doc_id=f"doc_{files_processed}_{text_file.stem}",
+            doc_id = f"doc_{files_processed}_{text_file.stem}"
+            vector_store.index_document(
+                doc_id=doc_id,
                 filename=text_file.name,
                 file_type=".txt",
                 sentences=sentences,
                 embeddings=embeddings,
                 paragraph_indices=paragraph_indices,
                 author=author,
+                paragraph_labels=parsed.paragraph_labels,
             )
             index_time = time.time() - index_start
             total_indexing_time += index_time
@@ -188,6 +200,28 @@ def index_texts_directory(
 
     # Shutdown Ray
     distributed_pipeline.shutdown()
+
+    # Swap the new index in only if every non-empty file was indexed.
+    # A running server keeps its old index in memory: restart it afterwards.
+    if files_processed > 0 and files_processed + files_skipped == len(text_files):
+        # Move the old metadata out first: if the run dies between the renames,
+        # startup finds no metadata.json and fails loudly instead of pairing the
+        # new vectors with the old corpus's metadata
+        old_metadata = data_path / "metadata.json.old"
+        if metadata_file.exists():
+            os.replace(metadata_file, old_metadata)
+        os.replace(staging_path / "faiss.index", index_file)
+        os.replace(staging_path / "metadata.json", metadata_file)
+        if old_metadata.exists():
+            os.remove(old_metadata)
+        shutil.rmtree(staging_path, ignore_errors=True)
+        print(f"\n💾 Replaced live index in {data_path} (restart the server to load it)")
+    else:
+        shutil.rmtree(staging_path, ignore_errors=True)
+        failed = len(text_files) - files_processed - files_skipped
+        print(
+            f"\n⚠️  {failed} file(s) failed; kept the previous index in {data_path}"
+        )
 
     # Print comprehensive summary
     print(f"\n{'='*70}")
