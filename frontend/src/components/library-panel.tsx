@@ -55,19 +55,19 @@ export function LibraryPanel({
   return (
     <section
       aria-labelledby="library-heading"
-      className="bg-white border border-gray-200 rounded-lg lg:max-h-[calc(100vh-3rem)] lg:flex lg:flex-col"
+      className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg lg:max-h-[calc(100vh-3rem)] lg:flex lg:flex-col"
     >
-      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-gray-200">
+      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-2">
           <h2
             id="library-heading"
             ref={headingRef}
             tabIndex={-1}
-            className="flex items-center gap-2 text-sm font-semibold text-gray-900 focus:outline-none"
+            className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:outline-none"
           >
-            <Library className="w-4 h-4 text-gray-500" aria-hidden="true" />
+            <Library className="w-4 h-4 text-gray-500 dark:text-gray-400" aria-hidden="true" />
             Library
-            <span className="text-xs font-normal text-gray-500">{summary}</span>
+            <span className="text-xs font-normal text-gray-500 dark:text-gray-400">{summary}</span>
           </h2>
           {/* Collapse control for small screens; the list is always shown from lg up */}
           <button
@@ -76,7 +76,7 @@ export function LibraryPanel({
             aria-expanded={open}
             aria-controls="library-list"
             aria-labelledby="library-heading"
-            className="lg:hidden p-1 -m-1 rounded text-gray-400 hover:text-gray-600 cursor-pointer"
+            className="lg:hidden p-1 -m-1 rounded text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer"
           >
             <ChevronDown
               className={cn("w-4 h-4 transition-transform", open && "rotate-180")}
@@ -90,7 +90,7 @@ export function LibraryPanel({
               type="button"
               onClick={onSelectAll}
               disabled={disabled}
-              className="px-2 py-1 rounded text-blue-700 hover:bg-blue-50 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+              className="px-2 py-1 rounded text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/15 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
             >
               All
             </button>
@@ -98,7 +98,7 @@ export function LibraryPanel({
               type="button"
               onClick={onSelectNone}
               disabled={disabled}
-              className="px-2 py-1 rounded text-blue-700 hover:bg-blue-50 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+              className="px-2 py-1 rounded text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/15 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
             >
               None
             </button>
@@ -108,13 +108,13 @@ export function LibraryPanel({
 
       {/* Outside the collapsible list so it's visible on mobile too */}
       {loadError && (
-        <div role="alert" className="flex items-start justify-between gap-2 px-4 py-3 border-b border-gray-200">
-          <p className="text-sm text-red-700">{loadError}</p>
+        <div role="alert" className="flex items-start justify-between gap-2 px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+          <p className="text-sm text-red-700 dark:text-red-400">{loadError}</p>
           <button
             type="button"
             onClick={onRetry}
             disabled={retrying}
-            className="shrink-0 px-2 py-1 -my-1 rounded text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:text-gray-400 disabled:hover:bg-transparent cursor-pointer disabled:cursor-wait"
+            className="shrink-0 px-2 py-1 -my-1 rounded text-xs font-medium text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/15 disabled:text-gray-400 disabled:hover:bg-transparent cursor-pointer disabled:cursor-wait"
           >
             {retrying ? "Retrying…" : "Retry"}
           </button>
@@ -125,9 +125,9 @@ export function LibraryPanel({
         id="library-list"
         className={cn("p-2 lg:overflow-y-auto lg:min-h-0", open ? "block" : "hidden lg:block")}
       >
-        {!loadError && !loaded && <p className="px-2 py-3 text-sm text-gray-500">Loading books…</p>}
+        {!loadError && !loaded && <p className="px-2 py-3 text-sm text-gray-500 dark:text-gray-400">Loading books…</p>}
         {!loadError && loaded && docs.length === 0 && (
-          <p className="px-2 py-3 text-sm text-gray-500">
+          <p className="px-2 py-3 text-sm text-gray-500 dark:text-gray-400">
             No books are indexed yet. Run <code className="text-xs">python -m app.scripts.index_texts</code> in
             backend/.
           </p>
@@ -148,8 +148,8 @@ export function LibraryPanel({
                     "w-full flex items-center gap-3 p-2 rounded-md border text-left transition-colors cursor-pointer",
                     "disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-blue-600",
                     isSelected
-                      ? "border-blue-200 bg-blue-50/60 hover:bg-blue-50"
-                      : "border-transparent hover:bg-gray-50",
+                      ? "border-blue-200 dark:border-blue-500/40 bg-blue-50/60 dark:bg-blue-500/10 hover:bg-blue-50 dark:hover:bg-blue-500/15"
+                      : "border-transparent hover:bg-gray-50 dark:hover:bg-gray-800",
                   )}
                 >
                   <BookCover book={book} className={cn(!isSelected && "opacity-40 grayscale")} />
@@ -157,16 +157,16 @@ export function LibraryPanel({
                     <span
                       className={cn(
                         "block text-sm font-medium truncate",
-                        isSelected ? "text-gray-900" : "text-gray-500",
+                        isSelected ? "text-gray-900 dark:text-gray-100" : "text-gray-500 dark:text-gray-400",
                       )}
                     >
                       {book.title}
                     </span>
-                    <span className="block text-xs text-gray-500 truncate">
+                    <span className="block text-xs text-gray-500 dark:text-gray-400 truncate">
                       {book.author ?? "Unknown author"}
                       {book.date && ` · ${book.date}`}
                     </span>
-                    <span className="block text-[11px] text-gray-400 truncate">
+                    <span className="block text-[11px] text-gray-500 dark:text-gray-400 truncate">
                       {book.tradition ? `${book.tradition} · ` : ""}
                       {doc.total_paragraphs.toLocaleString()} passages
                     </span>
@@ -175,7 +175,7 @@ export function LibraryPanel({
                     aria-hidden="true"
                     className={cn(
                       "w-4 h-4 rounded border flex items-center justify-center shrink-0",
-                      isSelected ? "bg-blue-700 border-blue-700" : "bg-white border-gray-300",
+                      isSelected ? "bg-blue-700 border-blue-700" : "bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700",
                     )}
                   >
                     {isSelected && <Check className="w-3 h-3 text-white" strokeWidth={3} />}

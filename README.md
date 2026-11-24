@@ -2,6 +2,8 @@
 
 A semantic search and RAG (Retrieval-Augmented Generation) platform for philosophical texts, featuring a Vite + React frontend and FastAPI backend with 2-stage retrieval and AI-powered answers.
 
+![PhiloSearch answering "How should I respond to things outside my control?" with numbered citations to Seneca and Epictetus](docs/screenshot.png)
+
 ## Features
 
 - 🔍 **Semantic Search**: Sentence embeddings with all-MiniLM-L6-v2 (384-dim)
@@ -12,6 +14,7 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 - ⚡ **Ray Distributed Processing**: 3.74x faster embedding than single-threaded CPU (10 workers)
 - 📌 **Structured Citations**: Short 1–3 sentence excerpts labelled by book and section (e.g. "Meditations, Book 6, §49")
 - 🚀 **Automatic Device Detection**: MPS/CUDA/CPU
+- 🌓 **Light and Dark Themes**: Follows the system setting, with a toggle in the header
 
 ## Architecture
 
@@ -319,6 +322,7 @@ philosearch/
 │   │       ├── answer-format.ts        # Renders the answer's Markdown
 │   │       ├── books.ts                # Book titles, dates, cover colours, section labels
 │   │       ├── api.ts                  # API base URL and error helper
+│   │       ├── theme.ts                # Light/dark theme (system setting + toggle)
 │   │       └── utils.ts                # Utility functions
 │   ├── vite.config.ts                  # Dev proxy: /api -> localhost:8000
 │   └── package.json
