@@ -13,6 +13,52 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 - 📌 **Structured Citations**: Short 1–3 sentence excerpts labelled by book and section (e.g. "Meditations, Book 6, §49")
 - 🚀 **Automatic Device Detection**: MPS/CUDA/CPU
 
+## Architecture
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "-apple-system, Segoe UI, Helvetica, Arial, sans-serif", "fontSize": "14px", "lineColor": "#94a3b8", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "titleColor": "#334155"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 44, "padding": 14}}}%%
+flowchart TB
+    UI(["<b>Browser</b><br/>question + selected books"])
+
+    subgraph IDX["INDEXING · OFFLINE"]
+        T["Source texts<br/><small>TXT · PDF · MD · DOCX</small>"] --> P["Parse passages<br/><small>section labels, footnotes dropped</small>"]
+        P --> S["Split sentences<br/><small>NLTK</small>"]
+        S --> E1["Embed sentences<br/><small>all-MiniLM-L6-v2</small>"]
+    end
+
+    STORE[("<b>Vector store</b><br/><small>FAISS sentence vectors<br/>passages · books · labels</small>")]
+
+    subgraph API["FASTAPI · /search-and-generate"]
+        A["Verify session"] --> Q["Embed question<br/><small>all-MiniLM-L6-v2</small>"]
+        Q --> K["Retrieve top 30 sentences<br/><small>within selected books</small>"]
+        K --> X["Build excerpts<br/><small>matched sentence + neighbours</small>"]
+        X --> R["Rerank excerpts<br/><small>ms-marco-MiniLM-L-6-v2</small>"]
+        R --> G["Assemble prompt<br/><small>excerpts to cite, passages as context</small>"]
+    end
+
+    LLM["Generate answer<br/><small>Gemini 3.8 Flash</small>"]
+    OUT(["<b>Browser</b><br/>streamed answer + citations"])
+
+    UI --> A
+    E1 --> STORE
+    K -.- STORE
+    X -.- STORE
+    G --> LLM
+    R -- "sources" --> OUT
+    LLM -- "tokens" --> OUT
+
+    classDef step fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#0f172a
+    classDef model fill:#eff6ff,stroke:#1d4ed8,stroke-width:1.5px,color:#0f172a
+    classDef store fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#0f172a
+    classDef client fill:#1d4ed8,stroke:#1d4ed8,color:#ffffff
+
+    class T,P,S,A,K,X,G step
+    class E1,Q,R,LLM model
+    class STORE store
+    class UI,OUT client
+    linkStyle default stroke:#94a3b8,stroke-width:1.5px
+```
+
 ## Tech Stack
 
 - **Frontend**: Vite, React 19, TypeScript, Tailwind CSS v4
