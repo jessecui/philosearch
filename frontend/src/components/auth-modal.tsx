@@ -79,19 +79,19 @@ export function AuthModal({ onAuthenticated }: AuthModalProps) {
         onEscapeKeyDown={(e) => e.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-lg font-semibold text-gray-900">
+          <DialogTitle className="flex items-center gap-2 text-lg font-semibold text-gray-900 dark:text-zinc-100">
             <LogoMark />
             PhiloSearch
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <DialogDescription className="text-sm text-gray-500">
+            <DialogDescription className="text-sm text-gray-500 dark:text-zinc-400">
               A semantic search engine for philosophical texts
             </DialogDescription>
             <label
               htmlFor="creator-question"
-              className="block pt-2 text-sm font-medium text-gray-900"
+              className="block pt-2 text-sm font-medium text-gray-900 dark:text-zinc-100"
             >
               To continue, enter the name of this project's creator.
             </label>
@@ -104,18 +104,18 @@ export function AuthModal({ onAuthenticated }: AuthModalProps) {
               onChange={(e) => setAnswer(e.target.value)}
               disabled={isLoading}
               autoComplete="one-time-code"
-              className="w-full h-10 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:bg-gray-50"
+              className="w-full h-10 px-3 rounded-md border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm text-gray-900 dark:text-zinc-100 placeholder:text-gray-500 dark:placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:bg-gray-50 dark:disabled:bg-zinc-800"
               placeholder="Full name"
               autoFocus
             />
           </div>
           {error && (
-            <p role="alert" className="text-sm text-red-700">{error}</p>
+            <p role="alert" className="text-sm text-red-700 dark:text-red-400">{error}</p>
           )}
           <button
             type="submit"
             disabled={isLoading || !answer.trim()}
-            className="w-full h-10 rounded-md bg-blue-700 text-white text-sm font-medium hover:bg-blue-800 disabled:bg-gray-200 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full h-10 rounded-md bg-blue-700 text-white text-sm font-medium hover:bg-blue-800 disabled:bg-gray-200 dark:disabled:bg-zinc-800 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
           >
             {isLoading ? (
               <>
