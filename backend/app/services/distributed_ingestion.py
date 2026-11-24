@@ -156,12 +156,6 @@ class DistributedIngestionPipeline:
         )
 
         return embeddings, embedding_time
-        print(
-            f"Embedding completed: {total_sentences} sentences in {embedding_time:.2f}s "
-            f"({total_sentences/embedding_time:.1f} sentences/sec)"
-        )
-
-        return embeddings, embedding_time
 
     def process_document(
         self,

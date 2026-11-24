@@ -27,4 +27,5 @@ WORKDIR /app/backend
 EXPOSE $PORT
 
 # Run the app
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# exec so uvicorn is PID 1 and receives SIGTERM for a clean shutdown
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

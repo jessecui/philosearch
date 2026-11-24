@@ -1,4 +1,6 @@
-Loading test_philosophy_document.txt...
+2026-11-24 00:49:10,656	INFO worker.py:1998 -- Started a local Ray instance. View the dashboard at [1m[32mhttp://127.0.0.1:8265 [39m[22m
+  warnings.warn(
+Loading eval_philosophy_document.txt...
 Loaded document with 26231 characters
 Multiplied by 100x = 2623100 total characters
 
@@ -16,54 +18,51 @@ Extracted 19900 sentences across 10000 paragraphs
 === Single Core CPU Non-Ray (Sequential) Ingestion ===
 Device: cpu
 Clearing FAISS data...
-Embedding time: 28.85s
-FAISS indexing time: 0.33s
-Total time: 29.18s
-Throughput: 681.9 sentences/sec
+Embedding time: 29.39s
+FAISS indexing time: 0.37s
+Total time: 29.77s
+Throughput: 668.6 sentences/sec
 
 === 10 Cores Ray Distributed (CPU Only) Ingestion ===
 Clearing FAISS data...
 Initializing Ray and workers...
-2026-01-03 18:49:21,024 INFO worker.py:1998 -- Started a local Ray instance. View the dashboard at http://127.0.0.1:8265 
 Initializing 10 CPU-based embedding workers...
-(EmbeddingWorker pid=67065) [Worker 1fb24e416eadabf69702ed9248039a4c9bb490a4995e1335291bf618] Loading model: all-MiniLM-L6-v2 on CPU
-(EmbeddingWorker pid=67065) [Worker 1fb24e416eadabf69702ed9248039a4c9bb490a4995e1335291bf618] Model loaded
+[36m(EmbeddingWorker pid=94810)[0m [Worker 10423104c613a88de0706e6b10b79403b205542f268aeb1402039c5b] Loading model: all-MiniLM-L6-v2 on CPU
+[36m(EmbeddingWorker pid=94810)[0m [Worker 10423104c613a88de0706e6b10b79403b205542f268aeb1402039c5b] Model loaded
 ✓ 10 workers initialized and ready
-Initialization time: 6.35s
+Initialization time: 6.61s
 
 Distributing 19900 sentences across 10 workers (~1990 sentences per worker)
 Waiting for 10 workers to complete...
-Embedding completed: 19900 sentences in 7.15s (2782.1 sentences/sec)
+Embedding completed: 19900 sentences in 7.66s (2596.4 sentences/sec)
 Indexing to FAISS...
-Embedding time (excluding init): 7.15s (embedding: 7.15s)
-FAISS indexing time: 0.21s
-Total time (excluding init): 7.36s
-Total time (including init): 13.71s
-Throughput: 2703.6 sentences/sec
-(EmbeddingWorker pid=67059) [Worker c2e3600383b844d47687db5a1559a6e935896da932a7978b4d0dd440] Loading model: all-MiniLM-L6-v2 on CPU [repeated 9x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
-(EmbeddingWorker pid=67057) [Worker 26ae4a4642bf0560ca5698dbe6fe54e338339ac00701ccc52e3613ac] Model loaded [repeated 9x across cluster]
+Embedding time (excluding init): 7.67s (embedding: 7.66s)
+FAISS indexing time: 0.29s
+Total time (excluding init): 7.95s
+Total time (including init): 14.57s
+Throughput: 2502.5 sentences/sec
+[36m(EmbeddingWorker pid=94816)[0m [Worker ca2815ebbd30b1afdb246ce6b3f66c0a8fed1a46e71d1c58f950c8fd] Loading model: all-MiniLM-L6-v2 on CPU[32m [repeated 9x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(EmbeddingWorker pid=94814)[0m [Worker 9ab1a863e0c9ce889d80ce1fca198d32690f10316790e540f9e7a842] Model loaded[32m [repeated 9x across cluster][0m
 Ray workers shutdown
 
-Clearing FAISS data...
-
 === Results (Excluding Initialization) ===
-Speedup: 3.96x
-Latency Reduction: 74.8%
-Throughput Increase: 3.96x
+Speedup: 3.74x
+Latency Reduction: 73.3%
+Throughput Increase: 3.74x
 
 === Results (Including Initialization) ===
-Speedup: 2.13x
-Latency Reduction: 53.0%
-Sequential: 29.18s vs Ray total: 13.71s
+Speedup: 2.04x
+Latency Reduction: 51.1%
+Sequential: 29.77s vs Ray total: 14.57s
 
 === Final Summary ===
-Sequential (non-Ray, CPU): 29.18s, 681.9 sentences/sec
-10 Cores Ray (CPU): 7.36s, 2703.6 sentences/sec
+Sequential (non-Ray, CPU): 29.77s, 668.6 sentences/sec
+10 Cores Ray (CPU): 7.95s, 2502.5 sentences/sec
 
 Excluding initialization:
-  Speedup: 3.96x
-  Latency Reduction: 74.8%
+  Speedup: 3.74x
+  Latency Reduction: 73.3%
 
 Including initialization:
-  Speedup: 2.13x
-  Latency Reduction: 53.0%
+  Speedup: 2.04x
+  Latency Reduction: 51.1%
