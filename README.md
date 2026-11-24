@@ -67,6 +67,8 @@ CREATOR_NAME=your-name                  # the name the access prompt asks for
 
 ### 3. Index the Texts
 
+The index isn't committed (it stores every passage in full), so build it before the first run. Three of the eight texts are still under copyright and aren't included in this repo either; add your own copies to `backend/texts/` under the filenames listed in [Texts](#texts), or index just the public-domain ones.
+
 Index the philosophical texts in `backend/texts/` to create the FAISS vector store:
 
 ```bash
@@ -308,18 +310,20 @@ philosearch/
 
 The library in `backend/texts/` (filenames are `Title__Author_Name.txt`):
 
-| Work | Author | Edition |
-|------|--------|---------|
-| Moral Letters to Lucilius | Seneca | Tr. Richard M. Gummere (Loeb, 1917–1925), via [Standard Ebooks](https://standardebooks.org/ebooks/seneca/moral-letters-to-lucilius/richard-m-gummere) |
-| Nicomachean Ethics | Aristotle | Tr. F. H. Peters, via [Standard Ebooks](https://standardebooks.org/ebooks/aristotle/nicomachean-ethics/f-h-peters) |
-| Meditations | Marcus Aurelius | |
-| The Enchiridion | Epictetus | |
-| Beyond Good and Evil | Friedrich Nietzsche | |
-| Self-Reliance | Ralph Waldo Emerson | |
-| Tao Te Ching | Lao Tzu | |
-| The Myth of Sisyphus | Albert Camus | |
+| Work | Author | Edition | In repo |
+|------|--------|---------|---------|
+| Tao Te Ching | Lao Tzu | Tr. Stephen Mitchell (1988) | No (copyright) — `Tao_Te_Ching__Lao_Tzu.txt` |
+| Nicomachean Ethics | Aristotle | Tr. F. H. Peters, via [Standard Ebooks](https://standardebooks.org/ebooks/aristotle/nicomachean-ethics/f-h-peters) | Yes |
+| Letters from a Stoic | Seneca | Tr. Robin Campbell (Penguin Classics, 1969), a selection of 42 letters | No (copyright) — `Letters_from_a_Stoic__Seneca.txt` |
+| The Enchiridion | Epictetus | | Yes |
+| Meditations | Marcus Aurelius | | Yes |
+| Self-Reliance | Ralph Waldo Emerson | | Yes |
+| Beyond Good and Evil | Friedrich Nietzsche | | Yes |
+| The Myth of Sisyphus | Albert Camus | Tr. Justin O'Brien (1955) | No (copyright) — `The_Myth_of_Sisyphus__Albert_Camus.txt` |
 
-The Seneca and Aristotle texts were converted from the Standard Ebooks editions (public domain in the US) with front matter, endnotes and the letters' greetings and sign-offs removed. To add a book, save it as plain text with blank lines between paragraphs, run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`.
+The copyrighted texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition (public domain in the US) with front matter and endnotes removed. To add a book, save it as plain text with blank lines between paragraphs, run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`.
+
+**Deploying:** an image built from a clean checkout has no index (and no copyrighted texts), so the library starts empty. Supply the texts privately at build time and run `python -m app.scripts.index_texts` before starting the server.
 
 ---
 
