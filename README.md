@@ -16,39 +16,39 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 ## Architecture
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"fontFamily": "-apple-system, Segoe UI, Helvetica, Arial, sans-serif", "fontSize": "14px", "lineColor": "#94a3b8", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "titleColor": "#334155"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 44, "padding": 14}}}%%
+%%{init: {"theme": "base", "themeVariables": {"fontSize": "15px", "lineColor": "#94a3b8", "textColor": "#64748b", "clusterBkg": "transparent", "clusterBorder": "#94a3b8", "titleColor": "#64748b"}, "flowchart": {"curve": "basis", "nodeSpacing": 45, "rankSpacing": 45, "padding": 20, "wrappingWidth": 400}}}%%
 flowchart TB
-    UI(["<b>Browser</b><br/>question + selected books"])
+    UI(["Browser<br/>question + books"])
 
-    subgraph IDX["INDEXING · OFFLINE"]
-        T["Source texts<br/><small>TXT · PDF · MD · DOCX</small>"] --> P["Parse passages<br/><small>section labels, footnotes dropped</small>"]
-        P --> S["Split sentences<br/><small>NLTK</small>"]
-        S --> E1["Embed sentences<br/><small>all-MiniLM-L6-v2</small>"]
+    subgraph IDX["#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;Indexing (offline)#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;"]
+        T["Source texts<br/>TXT · PDF · MD · DOCX"] --> P["Parse passages<br/>+ section labels"]
+        P --> S["Split sentences<br/>NLTK"]
+        S --> E1["Embed sentences<br/>all-MiniLM-L6-v2"]
     end
 
-    STORE[("<b>Vector store</b><br/><small>FAISS sentence vectors<br/>passages · books · labels</small>")]
+    STORE[("Vector store<br/>FAISS + metadata")]
 
-    subgraph API["FASTAPI · /search-and-generate"]
-        A["Verify session"] --> Q["Embed question<br/><small>all-MiniLM-L6-v2</small>"]
-        Q --> K["Retrieve top 30 sentences<br/><small>within selected books</small>"]
-        K --> X["Build excerpts<br/><small>matched sentence + neighbours</small>"]
-        X --> R["Rerank excerpts<br/><small>ms-marco-MiniLM-L-6-v2</small>"]
-        R --> G["Assemble prompt<br/><small>excerpts to cite, passages as context</small>"]
+    subgraph API["#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;API: /search-and-generate#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;"]
+        A["Verify session"] --> Q["Embed question<br/>all-MiniLM-L6-v2"]
+        Q --> K["Top 30 sentences<br/>in selected books"]
+        K --> X["Build excerpts<br/>sentence + neighbours"]
+        X --> R["Rerank excerpts<br/>ms-marco-MiniLM-L-6-v2"]
+        R --> G["Assemble prompt<br/>excerpts + passages"]
     end
 
-    LLM["Generate answer<br/><small>Gemini 3.8 Flash</small>"]
-    OUT(["<b>Browser</b><br/>streamed answer + citations"])
+    LLM["Generate answer<br/>Gemini 3.8 Flash"]
+    OUT(["Browser<br/>streamed answer<br/>+ cited sources"])
 
     UI --> A
     E1 --> STORE
     K -.- STORE
     X -.- STORE
     G --> LLM
-    R -- "sources" --> OUT
-    LLM -- "tokens" --> OUT
+    R --> OUT
+    LLM --> OUT
 
-    classDef step fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#0f172a
-    classDef model fill:#eff6ff,stroke:#1d4ed8,stroke-width:1.5px,color:#0f172a
+    classDef step fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
+    classDef model fill:#eff6ff,stroke:#2563eb,stroke-width:2px,color:#0f172a
     classDef store fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#0f172a
     classDef client fill:#1d4ed8,stroke:#1d4ed8,color:#ffffff
 
