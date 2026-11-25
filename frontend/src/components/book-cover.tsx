@@ -1,7 +1,7 @@
 import type { BookInfo } from "@/lib/books";
 import { cn } from "@/lib/utils";
 
-const CONNECTING_WORDS = new Set(["a", "an", "and", "the", "of", "to", "in", "on", "for", "by", "with"]);
+const CONNECTING_WORDS = new Set(["a", "an", "and", "the", "of", "to", "in", "on", "for", "by", "with", "from"]);
 
 // A small generated cover: the book's colour, its initials and a rule.
 // Uses `coverImage` instead when one is configured in lib/books.ts.
@@ -37,6 +37,7 @@ export function BookCover({
     .filter((c): c is string => Boolean(c))
     .slice(0, 2);
   const initials = (
+    book.initials ||
     letters.join("") ||
     book.title.match(/[\p{L}\p{N}]/u)?.[0] ||
     "?"
