@@ -516,7 +516,7 @@ def run_test(vector_store: VectorStore, flat_index, mode: str):
             results, _ = vector_store.search_with_reranking(
                 query_text=query,
                 query_embedding=query_embedding,
-                top_k_faiss=30,  # Same candidate pool as the app: top 30 sentence hits
+                top_k_faiss=50,  # Same candidate pool as the app: top 50 sentence hits
                 top_k_paragraphs=10,
                 reranker=reranker,
                 context_window=0,

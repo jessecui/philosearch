@@ -11,7 +11,7 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 
 - 🔍 **Semantic Search**: Sentence embeddings with all-MiniLM-L6-v2 (384-dim)
 - 📚 **Book Selection**: Choose which works to search from the Library panel
-- 🎯 **2-Stage Retrieval**: Parent-child FAISS + cross-encoder reranking (nDCG@10 +27.6% over flat search, 88% vs 50% accuracy@1)
+- 🎯 **2-Stage Retrieval**: Parent-child FAISS + cross-encoder reranking (nDCG@10 +27.7% over flat search, 88% vs 50% accuracy@1)
 - 🤖 **RAG Generation**: Gemini 3.8 Flash streaming answers with source citations
 - 📄 **Multi-format Support**: PDF, TXT, MD, DOCX
 - ⚡ **Ray Distributed Processing**: 3.74x faster embedding than single-threaded CPU (10 workers)
@@ -36,7 +36,7 @@ flowchart TB
 
     subgraph API["#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;API: /search-and-generate#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;"]
         A["Verify session"] --> Q["Embed question<br/>all-MiniLM-L6-v2"]
-        Q --> K["Top 30 sentences<br/>in selected books"]
+        Q --> K["Top 50 sentences<br/>in selected books"]
         K --> X["Build excerpts<br/>sentence + neighbours"]
         X --> R["Rerank excerpts<br/>ms-marco-MiniLM-L-6-v2"]
         R --> G["Assemble prompt<br/>excerpts + passages"]
@@ -168,7 +168,7 @@ In development the frontend calls the API through Vite's `/api` proxy (see `fron
 - `query` (required): Search text
 - `use_reranking` (default: false): Enable 2-stage retrieval
 - `top_k` (default: 5, max 50): Results to return
-- `top_k_faiss` (default: 30, max 200): FAISS sentence candidates for reranking
+- `top_k_faiss` (default: 50, max 200): FAISS sentence candidates for reranking
 - `context_window` (default: 2): Paragraphs before/after to include in each result (only with `use_reranking: true`)
 - `doc_ids` (optional): Only search these documents (ids from `GET /documents`); omit to search all. Unknown ids return 404 "Some selected books are no longer indexed."; an empty list returns 404 "Select at least one book to search."
 
@@ -176,7 +176,7 @@ In development the frontend calls the API through Vite's `/api` proxy (see `fron
 
 - `query` (required)
 - `top_k_context` (default: 5, max 20): Passages to cite (the web app uses 10)
-- `use_reranking` (default: true), `top_k_faiss` (default: 30)
+- `use_reranking` (default: true), `top_k_faiss` (default: 50)
 - `temperature` (default: 0.7), `max_output_tokens` (default: 8192, max 8192)
 - `doc_ids` (optional): Only search these documents. The web app sends the books ticked in its Library panel, and omits the field when every book is ticked. Unknown ids return 404 "Some selected books are no longer indexed."; an empty list returns 404 "Select at least one book to search."
 
@@ -262,10 +262,10 @@ Tested on 50 queries with graded relevance labels over a synthetic 100-paragraph
 | Metric | Flat search | Parent-child FAISS | Parent-child + Reranking | vs Flat | vs Parent-child |
 |--------|------------|--------------------|--------------------------|---------|-----------------|
 | **Accuracy@1** | 50% | 62% | 88% | **+38pp** | **+26pp** |
-| **nDCG@10** | 0.704 | 0.760 | 0.899 | **+27.6%** | **+18.3%** |
-| **MRR** | 0.659 | 0.740 | 0.930 | **+41.0%** | **+25.6%** |
+| **nDCG@10** | 0.704 | 0.760 | 0.899 | **+27.7%** | **+18.4%** |
+| **MRR** | 0.659 | 0.740 | 0.929 | **+40.9%** | **+25.5%** |
 
-Reranking adds roughly 30 ms per query on Apple MPS in this eval (see the "Reranked … excerpts in …s" lines in `eval_faiss_cross_encoder_ndcg_output.txt`) (about 0.05–0.5 s on the full corpus, depending on how many candidate excerpts are scored).
+Reranking adds roughly 90 ms per query on Apple MPS in this eval (see the "Reranked … excerpts in …s" lines in `eval_faiss_cross_encoder_ndcg_output.txt`) (about 0.05–0.5 s on the full corpus, depending on how many candidate excerpts are scored).
 
 ### When to Use Reranking
 
