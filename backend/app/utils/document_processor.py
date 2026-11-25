@@ -98,7 +98,13 @@ class DocumentProcessor:
           indexed as text; they become the label of the passages beneath them.
         - Numbered sections ("XLIX.", "63.", "52.") and bare chapter numbers
           (Tao Te Ching) always start a new passage and set its section label.
-        - Numbered footnotes ("5 Apropos of ...") are dropped.
+          The number is removed from the passage text, since the label shows it.
+        - Numbered footnotes ("5 Apropos of ..."), asterisk note markers and
+          inline "[Footnote: ...]" notes are dropped.
+        - A paragraph starting in lowercase finishes the previous sentence
+          (prose resuming after a quoted verse), so it joins that passage.
+        - A paragraph opening on a linking word ("Similarly, ...", "But ...")
+          joins the previous passage when both fit within MAX_PASSAGE_WORDS.
         - Short fragments (epigraphs, verse lines, "And this third:") are joined
           to the previous passage in the same section instead of standing alone.
         - Stanzas of a numbered chapter are kept together as one passage.
@@ -209,11 +215,33 @@ class DocumentProcessor:
                     section = f"§{m.group(1)}{m.group(2)}"
                 in_chapter_mode = False
                 starts_section = True
+                # The number is now the passage label, so it isn't repeated
+                # in the text ("9. Courage is..." under "Book 3, Chapter 9")
+                body = body[m.end():].lstrip()
+                # A few sections open in lowercase after their number
+                # ("XXIV. if any should put this question...")
+                body = body[:1].upper() + body[1:]
+
+            # Notes whose text isn't in the file ("those* who", "chriae *") or
+            # that interrupt the author mid-sentence ("[Footnote: ...]")
+            if not line_mode:
+                body = _NOTE_MARKER.sub("", body)
+                body = _INLINE_FOOTNOTE.sub("", body).strip()
+                if not body:
+                    continue
 
             words = len(body.split())
             prev = passages[-1] if passages else None
             same_section = prev is not None and prev["label"] == label()
             fits = prev is not None and prev["words"] + words <= MAX_PASSAGE_WORDS
+            # A paragraph opening in lowercase finishes the sentence before it,
+            # typically prose resuming after a quoted verse ("...long hence,"
+            # / "according to our Virgil, who..."), so it never stands alone
+            continues_sentence = body[:1].islower()
+            # A paragraph opening on a linking word ("Similarly, people who...",
+            # "But it is not...") answers the paragraph before it, so it joins
+            # that passage when the two fit together
+            continues_thought = fits and bool(LEAD_IN_WORD.match(body))
             joins_previous = (
                 not starts_section
                 and same_section
@@ -221,6 +249,8 @@ class DocumentProcessor:
                     # Line mode: each "paragraph" is one wrapped line, so keep
                     # joining; long runs are split at sentence boundaries below
                     line_mode
+                    or continues_sentence
+                    or continues_thought
                     or (fits and (in_chapter_mode or words < SHORT_FRAGMENT_WORDS))
                 )
             )
@@ -305,6 +335,15 @@ _ARABIC_SECTION = re.compile(r"^(\d{1,4})([A-Z]?)\.\s")  # "63. He who...", "65A
 _BARE_NUMBER_SENTENCE = re.compile(r"^(\d{1,4}[A-Z]?|[IVXLC]{1,7})\.$")
 _CHAPTER_NUMBER_LINE = re.compile(r"^\d{1,3}$")  # "13" alone on a line
 _FOOTNOTE = re.compile(r"^(\d{1,2}) (?=[A-Z\"“'‘])")  # "5 Apropos of the notion..."
+# A paragraph that opens by answering the one before it ("Similarly, ...")
+LEAD_IN_WORD = re.compile(
+    r"^[\"“‘'(]*(but|and|yet|so|nor|or|thus|hence|therefore|accordingly|consequently"
+    r"|similarly|likewise|nevertheless|nonetheless|however|still|instead)\b",
+    re.IGNORECASE,
+)
+# An asterisk note marker: "those* who", "chriae * to learn", "honey’.*"
+_NOTE_MARKER = re.compile(r"(?<=\S) ?\*+(?=\s|$)")
+_INLINE_FOOTNOTE = re.compile(r"\s*\[Footnote:[^\]]*\]")  # "[Footnote: Like the frog: staccato.]"
 # "THE SIXTH BOOK" / "HIS FIRST BOOK" as the whole line, or "CHAPTER IX",
 # "Part 2", "Chapter 3: The Return", optionally followed by a title in caps or
 # title case. "The second book of Plato's Republic opens..." and "Part 2 of the
