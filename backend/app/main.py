@@ -324,7 +324,7 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
     deduplicate_paragraphs: bool = True
     use_reranking: bool = False  # Enable 2-stage retrieval with cross-encoder reranking
-    top_k_faiss: int = Field(default=30, ge=1, le=200)  # FAISS candidates (stage 1)
+    top_k_faiss: int = Field(default=50, ge=1, le=200)  # FAISS candidates (stage 1)
     context_window: int = Field(default=2, ge=0, le=5)  # Paragraphs before/after
     doc_ids: Optional[list[str]] = Field(default=None, max_length=200)  # Books to search (None = all)
 
@@ -333,7 +333,7 @@ class GenerateRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     top_k_context: int = Field(default=5, ge=1, le=20)  # Excerpts to retrieve
     use_reranking: bool = True  # Use cross-encoder reranking for better quality
-    top_k_faiss: int = Field(default=30, ge=1, le=200)  # FAISS candidates
+    top_k_faiss: int = Field(default=50, ge=1, le=200)  # FAISS candidates
     context_window: int = Field(default=0, ge=0, le=5)  # Paragraphs before/after
     doc_ids: Optional[list[str]] = Field(default=None, max_length=200)  # Books to search (None = all)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
@@ -693,7 +693,7 @@ async def search_documents(request: SearchRequest):
         top_k: Number of final results to return (default: 5)
         deduplicate_paragraphs: Return only one result per paragraph (default: True)
         use_reranking: Enable 2-stage retrieval with cross-encoder reranking (default: False)
-        top_k_faiss: Number of candidates from FAISS stage (default: 30, only used if use_reranking=True)
+        top_k_faiss: Number of candidates from FAISS stage (default: 50, only used if use_reranking=True)
         context_window: Number of paragraphs before/after for context expansion (default: 2)
 
     Returns:
@@ -993,7 +993,7 @@ async def search_and_generate(request: GenerateRequest):
         query: User's question
         top_k_context: Number of document excerpts to retrieve (default: 5)
         use_reranking: Enable cross-encoder reranking (default: True)
-        top_k_faiss: FAISS candidates for reranking (default: 30)
+        top_k_faiss: FAISS candidates for reranking (default: 50)
         context_window: Paragraphs before/after for context (default: 0)
         temperature: Generation temperature (default: 0.7)
         max_output_tokens: Maximum response length (default: 8192)

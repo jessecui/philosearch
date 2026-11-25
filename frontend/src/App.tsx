@@ -40,7 +40,8 @@ const STALE_SELECTION_DETAIL = "Some selected books are no longer indexed.";
 
 const PHASE_LABELS = {
   searching: "Finding relevant passages…",
-  thinking: "Reading sources…",
+  // Gemini reasons over the sources before its first token
+  thinking: "Thinking…",
   generating: "Writing answer…",
 } as const;
 
@@ -69,6 +70,28 @@ function trimExcerpt(excerpt: string): string {
   );
   const cut = clauseBreak > 150 ? clauseBreak : head.lastIndexOf(" ");
   return `${head.slice(0, cut).trimEnd()} …`;
+}
+
+// The full passage with the cited excerpt marked, so expanding a source keeps
+// the cited lines in view. The excerpt's sentences are joined by spaces while
+// the passage may break them across lines (verse), so whitespace is matched
+// loosely. If the excerpt isn't found, the passage is shown unmarked.
+function PassageWithExcerpt({ passage, excerpt }: { passage: string; excerpt?: string | null }) {
+  const words = excerpt?.trim().split(/\s+/) ?? [];
+  if (!words.length) return <>{passage}</>;
+  const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const match = new RegExp(escaped.join("\\s+")).exec(passage);
+  if (!match) return <>{passage}</>;
+  const end = match.index + match[0].length;
+  return (
+    <>
+      {passage.slice(0, match.index)}
+      <mark className="bg-amber-100 text-gray-900 dark:bg-amber-300/15 dark:text-zinc-100 rounded-sm">
+        {match[0]}
+      </mark>
+      {passage.slice(end)}
+    </>
+  );
 }
 
 export default function App() {
@@ -375,7 +398,7 @@ export default function App() {
           query: query,
           top_k_context: 10,
           use_reranking: true,
-          top_k_faiss: 30,
+          top_k_faiss: 50,
           context_window: 0, // neighbouring paragraphs are not used in answers
           temperature: 0.7,
           max_output_tokens: 8192,
@@ -572,7 +595,7 @@ export default function App() {
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       maxLength={2000}
-                      placeholder="e.g. Is suffering necessary for a meaningful life?"
+                      placeholder="e.g. What makes a life well lived?"
                       className={cn(
                         "w-full h-10 pl-9 pr-3 rounded-md border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-900",
                         "text-sm text-gray-900 dark:text-zinc-100 placeholder:text-gray-500 dark:placeholder:text-zinc-400",
@@ -729,7 +752,11 @@ export default function App() {
                                 )}
                               </div>
                               <p className="font-serif text-[15px] leading-7 text-gray-700 dark:text-zinc-300 whitespace-pre-line">
-                                {expandedPassages.has(idx) ? source.text : excerpt}
+                                {expandedPassages.has(idx) ? (
+                                  <PassageWithExcerpt passage={source.text} excerpt={source.excerpt} />
+                                ) : (
+                                  excerpt
+                                )}
                               </p>
                               {canExpand && (
                                 <button
