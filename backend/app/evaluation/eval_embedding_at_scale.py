@@ -26,7 +26,7 @@ METHODS = ("single", "default", "ray")
 LABELS = {
     "single": "Single-threaded CPU",
     "default": "PyTorch default multithreading (CPU)",
-    "ray": "Ray, 10 CPU workers",
+    "ray": "Ray, 8 CPU workers (one thread each)",
 }
 
 
@@ -64,7 +64,7 @@ def run_method(method: str, n: int) -> dict:
         from app.services.distributed_ingestion import DistributedIngestionPipeline
 
         start = time.perf_counter()
-        pipeline = DistributedIngestionPipeline(num_workers=10, batch_size=128)
+        pipeline = DistributedIngestionPipeline(num_workers=8, batch_size=128)
         startup = time.perf_counter() - start
         start = time.perf_counter()
         pipeline.embed_sentences_distributed(sentences)

@@ -293,16 +293,16 @@ Embedding 19,900 sentences with all-MiniLM-L6-v2 on a 12-core Mac (CPU unless no
 
 The Ray rows are the median of three runs (latency reduction 72.8%, 73.3%, 74.3%); results vary by about ±1 point between runs. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
 
-The table above counts Ray's startup separately. Counting startup for every method, and comparing against PyTorch's own multithreading, shows how large a job has to be before Ray pays off (`eval_embedding_at_scale`, sentences from the library repeated to each size):
+The table above counts Ray's startup separately. Counting startup for every method, and comparing against PyTorch's own multithreading, shows how large a job has to be before Ray pays off (`eval_embedding_at_scale`, sentences from the library repeated to each size). Both sides use the same 8 cores: PyTorch's default runs 8 threads (one per performance core on the M4 Pro), and each of Ray's 8 workers runs a single thread.
 
-| Sentences | Single-threaded CPU | PyTorch default multithreading | Ray, 10 CPU workers | Ray vs PyTorch default | Ray vs single-threaded |
-|-----------|--------------------|-------------------------------|---------------------|------------------------|------------------------|
-| 20,000 | 37.0s | 17.0s | 16.0s | 1.06x (−5.9% latency) | 2.31x (−56.7%) |
-| 300,000 | 506.0s | 219.4s | 143.2s | **1.53x (−34.7% latency)** | **3.53x (−71.7%)** |
+| Sentences | Single-threaded CPU | PyTorch default multithreading (8 threads) | Ray, 8 CPU workers | Ray vs PyTorch default | Ray vs single-threaded |
+|-----------|--------------------|-------------------------------------------|--------------------|------------------------|------------------------|
+| 20,000 | 36.2s | 16.4s | 16.3s | 1.00x (−0.5% latency) | 2.23x (−55.1%) |
+| 300,000 | 491.5s | 223.5s | 147.8s | **1.51x (−33.9% latency)** | **3.32x (−69.9%)** |
 
-Ray's ~6s worker startup roughly cancels its speed advantage around 20,000 sentences; by 300,000 it is under 5% of the run. An earlier run at 300,000 sentences gave 31.8% against PyTorch's default and 70.8% against single-threaded, so expect a few points of variation.
+Ray's ~6s worker startup cancels its speed advantage around 20,000 sentences; by 300,000 it is under 4% of the run. Once running, Ray's workers embed about 55% more sentences per second than PyTorch's threads on the same cores, because each worker processes its own batches instead of splitting every batch across threads. Earlier runs at 300,000 sentences gave 31.8%–35.0% against PyTorch's default, so expect a few points of variation. Adding workers beyond 8 doesn't help: 10 workers ran no faster, since the extra two land on efficiency cores.
 
-The benchmarks use 10 workers; `/index-distributed` runs 8. **Recommendation:** Use `/index-distributed` for CPU-only batches of tens of thousands of sentences or more. Below that, the regular indexing path, which uses PyTorch's multithreading or the GPU, is as fast or faster.
+`/index-distributed` also runs 8 workers. **Recommendation:** Use `/index-distributed` for CPU-only batches of tens of thousands of sentences or more. Below that, the regular indexing path, which uses PyTorch's multithreading or the GPU, is as fast or faster.
 
 ### Run Evaluations
 
