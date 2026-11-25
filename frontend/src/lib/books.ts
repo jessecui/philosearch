@@ -10,6 +10,7 @@ export interface BookInfo {
   tradition?: string;
   coverColor: string; // background of the generated cover
   coverImage?: string; // optional real cover, e.g. "/covers/meditations.jpg" in frontend/public
+  initials?: string; // cover initials when the title's first letters read badly
 }
 
 const BOOKS: Record<string, Omit<BookInfo, "author"> & { author: string }> = {
@@ -60,6 +61,7 @@ const BOOKS: Record<string, Omit<BookInfo, "author"> & { author: string }> = {
     year: -400,
     tradition: "Taoism",
     coverColor: "#7a5a24",
+    initials: "TC", // "Tao Ching" rather than a stuttering "TT"
   },
   The_Enchiridion: {
     title: "The Enchiridion",
