@@ -291,7 +291,7 @@ Embedding 19,900 sentences with all-MiniLM-L6-v2 on a 12-core Mac (CPU unless no
 | **Ray, 10 CPU workers** (including startup) | 13.94s | 1,428 sent/s | 2.03x (−50.7% latency) |
 | **Apple GPU (MPS), no Ray** | 5.80s | 3,431 sent/s | 4.9x |
 
-The Ray rows are the median of three runs (latency reduction 73.6%, 73.7%, 73.8%); results vary by about ±1 point between runs. The single-threaded baseline is warmed up before timing, like the Ray workers. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
+The Ray rows are the median of three runs (latency reduction 73.8%, 73.6%, 73.7%; all three are in `test_outputs/eval_ray_ingestion_latency_output.txt`); results vary by about ±1 point between runs. The single-threaded baseline is warmed up before timing, like the Ray workers. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
 
 The table above counts Ray's startup separately. Counting startup for every method, and comparing against PyTorch's own multithreading, shows how large a job has to be before Ray pays off (`eval_embedding_at_scale`, sentences from the library repeated to each size). Both sides use the same 8 cores: PyTorch's default runs 8 threads (one per performance core on the M4 Pro), and each of Ray's 8 workers runs a single thread.
 

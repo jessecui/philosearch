@@ -286,23 +286,26 @@ export default function App() {
         const items = block.items.map((item, j) => (
           <li key={j} className="leading-7">
             {formatInlineText(item.text)}
-            {item.children.length > 0 &&
-              (() => {
-                const SubList = item.childrenOrdered ? "ol" : "ul";
+            {item.parts.map((part, k) => {
+              if (part.kind === "text") {
                 return (
-                  <SubList
-                    className={cn(
-                      "list-outside pl-5 mt-1 space-y-1",
-                      item.childrenOrdered ? "list-decimal" : "list-disc",
-                    )}
-                  >
-                    {item.children.map((child, k) => (
-                      <li key={k}>{formatInlineText(child)}</li>
-                    ))}
-                  </SubList>
+                  <p key={k} className="mt-1">
+                    {formatInlineText(part.text)}
+                  </p>
                 );
-              })()}
-            {item.textAfter && <p className="mt-1">{formatInlineText(item.textAfter)}</p>}
+              }
+              const SubList = part.ordered ? "ol" : "ul";
+              return (
+                <SubList
+                  key={k}
+                  className={cn("list-outside pl-5 mt-1 space-y-1", part.ordered ? "list-decimal" : "list-disc")}
+                >
+                  {part.items.map((child, c) => (
+                    <li key={c}>{formatInlineText(child)}</li>
+                  ))}
+                </SubList>
+              );
+            })}
           </li>
         ));
         const listClass = "list-outside pl-5 space-y-1.5 my-3 marker:text-gray-500 dark:marker:text-zinc-500";
