@@ -273,9 +273,14 @@ def _upload_name_and_ext(file: UploadFile) -> tuple[str, str]:
     """
     display_name = os.path.basename((file.filename or "upload").replace("\\", "/"))
     file_ext = os.path.splitext(display_name)[1].lower()
-    # Search results echo the name back to /generate, which caps it at 300
+    # Search results echo the name back to /generate, which caps it at 300;
+    # a "__Author" suffix is kept, so the author survives the cut
     stem = os.path.splitext(display_name)[0]
-    display_name = stem[: 300 - len(file_ext)] + file_ext
+    title, sep, author = stem.partition("__")
+    room = 300 - len(file_ext) - len(sep) - len(author)
+    if room < 1:  # an author name alone over the limit: cut everything
+        title, sep, author, room = stem, "", "", 300 - len(file_ext)
+    display_name = title[:room] + sep + author + file_ext
     if file_ext not in ALLOWED_UPLOAD_EXTENSIONS:
         raise HTTPException(
             status_code=400,

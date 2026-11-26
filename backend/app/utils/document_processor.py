@@ -1,6 +1,5 @@
 from PyPDF2 import PdfReader
 from docx import Document
-from docx.table import Table
 from docx.text.paragraph import Paragraph
 import os
 import re
@@ -93,22 +92,7 @@ class DocumentProcessor:
                         for box in _docx_text_boxes(child):
                             walk(box)
                     elif tag == "tbl":
-                        rows = []
-                        for row in Table(child, doc).rows:
-                            cells, seen = [], set()
-                            for cell in row.cells:
-                                # A merged cell appears once per grid column; keep it once
-                                if id(cell._tc) in seen:
-                                    continue
-                                seen.add(id(cell._tc))
-                                # The cell's own paragraphs; _docx_text skips text boxes
-                                text = " ".join(
-                                    t for t in (_docx_text(p) for p in cell._tc.iterchildren(_W + "p")) if t
-                                )
-                                if text:
-                                    cells.append(text)
-                            if cells:
-                                rows.append(" | ".join(cells))
+                        rows = _docx_table_rows(child)
                         if rows:
                             blocks.append("\n".join(rows))
                     elif tag in ("sdt", "sdtContent", "ins", "customXml", "smartTag"):
@@ -278,23 +262,34 @@ class DocumentProcessor:
 
             # Leading heading lines inside a paragraph ("THE FIRST BOOK\nI. Of my...")
             popped_heading = False
+            popped_structural = False
             while len(lines) > 1 and _is_heading_line(
                 lines[0], standalone=False, line_mode=line_mode, next_line=lines[1]
             ):
                 popped = lines.pop(0)
                 heading, section, in_chapter_mode = _heading_label(popped), None, False
                 text_since_heading = False
-                popped_heading = bool(_STRUCTURAL_HEADING.match(popped))
-            # After a "CHAPTER I." style heading, the rest of a heading-only
-            # paragraph is its title ("CHAPTER I.\nThe Period" -> "Chapter I:
-            # The Period"); under a named heading ("## Sources\nPlato,
-            # Republic") the line is text
+                popped_heading = True
+                popped_structural = bool(
+                    _STRUCTURAL_HEADING.match(_MARKDOWN_HEADING.sub("", popped))
+                )
+            # The rest of a heading-only paragraph joins the label when it is a
+            # markdown heading itself ("# On Virtue\n## Introduction"), or the
+            # title after a "CHAPTER I." style heading ("CHAPTER I.\nThe
+            # Period" -> "Chapter I: The Period"). Under a named heading
+            # ("## Sources\nPlato, Republic") the line is text.
             if (
                 popped_heading
                 and len(lines) == 1
-                and not _ARABIC_SECTION.match(lines[0])
-                and not _ROMAN_SECTION.match(lines[0])
-                and _is_heading_line(lines[0], standalone=True, line_mode=line_mode)
+                and (
+                    _MARKDOWN_HEADING.match(lines[0])
+                    or (
+                        popped_structural
+                        and not _ARABIC_SECTION.match(lines[0])
+                        and not _ROMAN_SECTION.match(lines[0])
+                        and _is_heading_line(lines[0], standalone=True, line_mode=line_mode)
+                    )
+                )
             ):
                 heading = f"{heading}: {_heading_label(lines[0])}"
                 continue
@@ -700,6 +695,49 @@ def _docx_text(p_element) -> str:
     return "".join(parts).strip()
 
 
+# Elements that wrap content without changing it: content controls, tracked
+# insertions, custom XML
+_DOCX_WRAPPERS = {_W + "sdt", _W + "sdtContent", _W + "ins", _W + "customXml", _W + "smartTag"}
+
+
+def _docx_children(element, wanted: str):
+    """Children of `element` with tag `wanted`, looking through wrappers
+    (so a row or paragraph inside a content control is found)."""
+    for child in element:
+        if child.tag == wanted:
+            yield child
+        elif child.tag in _DOCX_WRAPPERS:
+            yield from _docx_children(child, wanted)
+
+
+def _docx_cell_text(tc) -> str:
+    """A table cell's text: its paragraphs (and their text boxes, once), and
+    any nested table, in order."""
+    parts: List[str] = []
+    for child in tc:
+        if child.tag in _DOCX_WRAPPERS:
+            parts.append(_docx_cell_text(child))
+        elif child.tag == _W + "p":
+            parts.append(_docx_text(child))
+            for box in _docx_text_boxes(child):
+                parts.append(_docx_cell_text(box))
+        elif child.tag == _W + "tbl":
+            parts.append(" ".join(_docx_table_rows(child)))
+    return " ".join(p for p in parts if p)
+
+
+def _docx_table_rows(tbl) -> List[str]:
+    """One line per row, cells separated by " | ". A horizontally merged cell
+    is a single element, so it appears once; the empty continuation cells of
+    a vertical merge are skipped."""
+    rows = []
+    for tr in _docx_children(tbl, _W + "tr"):
+        cells = [text for text in (_docx_cell_text(tc) for tc in _docx_children(tr, _W + "tc")) if text]
+        if cells:
+            rows.append(" | ".join(cells))
+    return rows
+
+
 def _docx_text_boxes(p_element) -> List:
     """Text boxes in a paragraph, skipping the fallback copy Word also stores."""
     boxes = []
@@ -719,8 +757,8 @@ def _docx_text_boxes(p_element) -> List:
 
 def _decode_text(data: bytes) -> str:
     """
-    Decode an uploaded text file: UTF-16 when it has a UTF-16 byte-order mark
-    (Windows "Unicode"), else UTF-8 (a BOM is removed). A file that is mostly
+    Decode an uploaded text file: UTF-32 or UTF-16 when it has that byte-order
+    mark (Windows "Unicode" is UTF-16), else UTF-8 (a BOM is removed). A file that is mostly
     valid UTF-8 with a few stray bytes keeps its UTF-8 text (the stray bytes
     are dropped); otherwise it is taken as Windows "ANSI" (cp1252), with
     latin-1 as the last resort.
@@ -737,7 +775,13 @@ def _decode_text(data: bytes) -> str:
     # of them than bad bytes; a cp1252 file ("café" as a single byte) has none
     lenient = data.decode("utf-8-sig", errors="replace")
     bad = lenient.count("\ufffd")
-    valid_non_ascii = sum(1 for c in lenient if ord(c) > 0x7F) - bad
+    # A cp1252 capital letter followed by a curly quote or dash can form a
+    # valid UTF-8 pair by accident ("É”" -> "ɔ"); such pairs decode to C1
+    # controls or IPA letters, which real text rarely contains, so they count
+    # against UTF-8
+    suspicious = sum(1 for c in lenient if 0x80 <= ord(c) <= 0x9F or 0x250 <= ord(c) <= 0x2FF)
+    valid_non_ascii = sum(1 for c in lenient if ord(c) > 0x7F) - bad - suspicious
+    bad += suspicious
     if valid_non_ascii and valid_non_ascii >= bad:
         return lenient.replace("\ufffd", "")
     try:
@@ -848,16 +892,20 @@ def _heading_label(line: str) -> str:
     # "AN ABSURD REASONING Absurdity and Suicide" -> part title in caps, then the
     # chapter title; the chapter title is the more specific label.
     # "FROM THE HEIGHTS By F. W. Nietzsche ..." -> caps title, then a byline.
-    # Words without lowercase letters ("SECTION 2", "APPENDIX A", "Q&A") all
-    # belong to the capitals.
+    # A caps word has two or more letters and no lowercase ("Q&A" counts;
+    # "2", "4.1", "A" and "I" don't, so "2 A Simple Model" stays whole).
     words = line.split()
     caps = 0
-    while caps < len(words) and not any(c.islower() for c in words[caps]):
+    while caps < len(words) and _is_caps_word(words[caps]):
         caps += 1
     # Two or more such words: one ("A Theory of Justice", "AI and Ethics") is
     # just the first word of a title-case heading
-    if 1 < caps < len(words) and not words[0].endswith(":") and any(
-        c.isalpha() for w in words[:caps] for c in w
+    # ... and only split off when a title-case title follows ("Absurdity and
+    # Suicide"), not more capitals ("Q&A WITH A STOIC")
+    if (
+        1 < caps < len(words)
+        and not words[0].endswith(":")
+        and any(c.islower() for w in words[caps:] for c in w)
     ):
         rest = " ".join(words[caps:])
         line = " ".join(words[:caps]) if rest.lower().startswith("by ") else rest
@@ -869,6 +917,11 @@ def _heading_label(line: str) -> str:
         head, sep, tail = line.partition(":")
         line = _title_case(head) + sep + tail
     return line if len(line) <= 80 else line[:77].rstrip() + "..."
+
+
+def _is_caps_word(word: str) -> bool:
+    letters = [c for c in word if c.isalpha()]
+    return len(letters) >= 2 and not any(c.islower() for c in letters)
 
 
 _ROMAN_NUMERAL = re.compile(r"^(?=[IVXLC])C{0,3}(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$")

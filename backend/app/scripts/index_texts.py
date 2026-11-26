@@ -1,12 +1,15 @@
 """
 Script to index all documents from the texts/ directory.
 
-This script processes all text files in the texts/ directory and adds them
-to the FAISS vector store for semantic search using distributed Ray processing.
+This script processes every TXT, MD, PDF and DOCX file in the texts/
+directory and adds them to the FAISS vector store for semantic search using
+distributed Ray processing. Documents uploaded through the API are carried
+over from the current index, so rebuilding the library doesn't remove them.
 """
 
 import atexit
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -19,6 +22,45 @@ backend_dir = Path(__file__).parent.parent.parent
 from app.utils.document_processor import DocumentProcessor
 from app.services.distributed_ingestion import DistributedIngestionPipeline
 from app.services.vector_store import VectorStore
+
+
+SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+# Document IDs this script gives the files in texts/; anything else in the
+# live index was uploaded through the API
+_TEXTS_DOC_ID = re.compile(r"^doc_\d+_")
+
+
+def _carry_over_uploads(vector_store: VectorStore, data_path: Path) -> int:
+    """
+    Copy documents uploaded through the API from the live index into the new
+    one, with their vectors, labels and display text, so a rebuild of the
+    library doesn't delete them. Returns how many were kept.
+    """
+    if not ((data_path / "faiss.index").exists() and (data_path / "metadata.json").exists()):
+        return 0
+    try:
+        live = VectorStore(data_dir=str(data_path))
+    except Exception as e:
+        print(f"\n⚠️  Could not read the current index to keep uploaded documents: {e}")
+        return 0
+    kept = 0
+    for doc in live.list_documents():
+        if _TEXTS_DOC_ID.match(doc.doc_id) or doc.doc_id in vector_store.documents:
+            continue
+        positions = [i for i, s in enumerate(live.sentences) if s.doc_id == doc.doc_id]
+        vector_store.index_document(
+            doc_id=doc.doc_id,
+            filename=doc.filename,
+            file_type=doc.file_type,
+            sentences=[live.sentences[i].sentence_text for i in positions],
+            paragraph_indices=[live.sentences[i].paragraph_idx for i in positions],
+            embeddings=[live.index.reconstruct(i).tolist() for i in positions],
+            author=doc.author,
+            paragraph_labels={p: v for (d, p), v in live.paragraph_labels.items() if d == doc.doc_id},
+            paragraph_texts={p: v for (d, p), v in live.paragraph_cache.items() if d == doc.doc_id},
+        )
+        kept += 1
+    return kept
 
 
 def parse_filename(filename: str) -> tuple[str, str | None]:
@@ -95,11 +137,13 @@ def index_texts_directory(
     init_time = time.time() - init_start
     print(f"  ✓ Initialization complete in {init_time:.2f}s")
 
-    # Find all text files
-    text_files = list(texts_path.glob("*.txt"))
+    # Find all documents (sorted, so document IDs are stable between runs)
+    text_files = sorted(
+        f for f in texts_path.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
+    )
 
     if not text_files:
-        print(f"No .txt files found in {texts_path}")
+        print(f"No {', '.join(sorted(SUPPORTED_EXTENSIONS))} files found in {texts_path}")
         distributed_pipeline.shutdown()
         shutil.rmtree(staging_path, ignore_errors=True)
         return
@@ -127,8 +171,8 @@ def index_texts_directory(
         try:
             # Read and parse the file
             parse_start = time.time()
-            with open(text_file, "r", encoding="utf-8") as f:
-                text = f.read()
+            # Same extraction as uploads: PDF, DOCX, and text in any common encoding
+            text = document_processor.extract_text(str(text_file), text_file.suffix.lower())
 
             if not text.strip():
                 print(f"  ⚠️  Skipping empty file: {text_file.name}")
@@ -166,7 +210,7 @@ def index_texts_directory(
             vector_store.index_document(
                 doc_id=doc_id,
                 filename=text_file.name,
-                file_type=".txt",
+                file_type=text_file.suffix.lower(),
                 sentences=sentences,
                 embeddings=embeddings,
                 paragraph_indices=paragraph_indices,
@@ -206,6 +250,9 @@ def index_texts_directory(
     # A running server keeps its old index in memory: restart it afterwards.
     installed = files_processed > 0 and files_processed + files_skipped == len(text_files)
     if installed:
+        kept = _carry_over_uploads(vector_store, data_path)
+        if kept:
+            print(f"\n📎 Kept {kept} document(s) uploaded through the API")
         # Move the old metadata out first: if the run dies between the renames,
         # startup finds no metadata.json and fails loudly instead of pairing the
         # new vectors with the old corpus's metadata

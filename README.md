@@ -291,7 +291,7 @@ Embedding and indexing 19,900 sentences with all-MiniLM-L6-v2 on a 12-core Mac (
 | **Ray, 10 CPU workers** (including startup) | 13.94s | 1,428 sent/s | 2.03x (−50.7% latency) |
 | **Apple GPU (MPS), no Ray** | 5.80s | 3,431 sent/s | 4.9x |
 
-The Ray rows are the median of three runs (latency reduction 73.8%, 73.6%, 73.7%; all three are in `test_outputs/eval_ray_ingestion_latency_output.txt`); results vary by about ±1 point between runs. The single-threaded baseline is warmed up before timing, like the Ray workers. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
+The Ray rows are from run 3 of three, the run with the median latency reduction (73.8%, 73.6%, 73.7%; all three are in `test_outputs/eval_ray_ingestion_latency_output.txt`); results vary by about ±1 point between runs. The single-threaded baseline is warmed up before timing, like the Ray workers. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
 
 The table above counts Ray's startup separately. Counting startup for every method, and comparing against PyTorch's own multithreading, shows how large a job has to be before Ray pays off (`eval_embedding_at_scale`, sentences from the library repeated to each size). Both sides use the same 8 cores: PyTorch's default runs 8 threads (one per performance core on the M4 Pro), and each of Ray's 8 workers runs a single thread.
 
@@ -394,7 +394,7 @@ The library in `backend/texts/` (filenames are `Title__Author_Name.txt`):
 | Beyond Good and Evil | Friedrich Nietzsche | | `Beyond_Good_and_Evil__Friedrich_Nietzsche.txt` |
 | The Myth of Sisyphus | Albert Camus | Tr. Justin O'Brien (1955) | `The_Myth_of_Sisyphus__Albert_Camus.txt` |
 
-The texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition with front matter and endnotes removed. To add a book, save it as plain text with blank lines between paragraphs, run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`.
+The texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition with front matter and endnotes removed. To add a book, save it in `backend/texts/` as plain text with blank lines between paragraphs (MD, PDF and DOCX also work), run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`. Rebuilding keeps documents uploaded through the API: they are copied over from the current index.
 
 **Deploying:** the Dockerfile copies `backend/` as it is and starts the server; it doesn't build an index. An image built from a clean checkout therefore has no texts or index, and the library starts empty. Run `python -m app.scripts.index_texts` locally first, so `backend/data/` is copied into the image, or mount a volume at `/app/backend/data` that holds a built index. An index built inside a running container without a volume is lost when the container is recreated.
 
