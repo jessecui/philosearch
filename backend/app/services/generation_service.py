@@ -7,9 +7,8 @@ based on document excerpts retrieved from the RAG pipeline.
 
 import os
 import re
-import time
 import asyncio
-from typing import List, AsyncGenerator, Dict, Any, Tuple
+from typing import List, AsyncGenerator, Tuple
 import httpx
 from google import genai
 from google.genai import errors as genai_errors
@@ -273,80 +272,4 @@ Tone: Warm but not gushing. Clear but not dry. Like explaining an interesting id
             import traceback
 
             traceback.print_exc()
-            raise Exception(error_msg)
-
-    def generate_answer(
-        self,
-        query: str,
-        search_results: List[SearchResult],
-        temperature: float = None,
-        max_output_tokens: int = None,
-    ) -> Dict[str, Any]:
-        """
-        Generate a complete (non-streaming) answer.
-
-        Args:
-            query: User's question
-            search_results: List of relevant document excerpts
-            temperature: Override default temperature
-            max_output_tokens: Override default max tokens
-
-        Returns:
-            Dictionary with answer text and metadata
-        """
-        # Format the context from search results
-        context = self._format_context(search_results)
-
-        # Create the system prompt and user prompt
-        system_prompt = self._create_system_prompt()
-        user_prompt = f"{context}\n\n=== Question ===\n{query}\n\n=== Answer ===\n"
-
-        # Configure generation
-        config = GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=temperature if temperature is not None else self.temperature,
-            max_output_tokens=(
-                max_output_tokens
-                if max_output_tokens is not None
-                else self.max_output_tokens
-            ),
-            top_p=0.95,
-            top_k=40,
-            thinking_config=ThinkingConfig(
-                thinking_level="medium"  # Match the streaming path
-            ),
-        )
-
-        # Generate response
-        start_time = time.time()
-        try:
-            models = self._models_to_try()
-            for i, model in enumerate(models):
-                try:
-                    response = self.client.models.generate_content(
-                        model=model,
-                        contents=user_prompt,
-                        config=config,
-                    )
-                    break
-                except Exception as e:
-                    if i == len(models) - 1 or not self._is_overloaded(e):
-                        raise
-                    print(f"⚠️  {model} unavailable ({getattr(e, 'code', type(e).__name__)}), falling back to {models[i + 1]}")
-            generation_time = time.time() - start_time
-
-            return {
-                "answer": response.text,
-                "generation_time": generation_time,
-                "model": model,
-                "usage": {
-                    "prompt_tokens": response.usage_metadata.prompt_token_count,
-                    "completion_tokens": response.usage_metadata.candidates_token_count,
-                    "total_tokens": response.usage_metadata.total_token_count,
-                },
-            }
-
-        except Exception as e:
-            error_msg = f"Error generating response: {str(e)}"
-            print(f"❌ {error_msg}")
             raise Exception(error_msg)

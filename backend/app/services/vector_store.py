@@ -329,6 +329,10 @@ class VectorStore:
         index_backup = f"{self.index_path}.bak"
         try:
             faiss.write_index(self.index, index_tmp)
+            # Flushed to disk before the rename, like the metadata, so a power
+            # loss can't leave a partly written index under the real name
+            with open(index_tmp, "rb+") as f:
+                os.fsync(f.fileno())
             self._write_metadata(metadata_tmp)
         except Exception:
             for tmp in (index_tmp, metadata_tmp):

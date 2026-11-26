@@ -273,12 +273,24 @@ def _upload_name_and_ext(file: UploadFile) -> tuple[str, str]:
     """
     display_name = os.path.basename((file.filename or "upload").replace("\\", "/"))
     file_ext = os.path.splitext(display_name)[1].lower()
+    # Search results echo the name back to /generate, which caps it at 300
+    stem = os.path.splitext(display_name)[0]
+    display_name = stem[: 300 - len(file_ext)] + file_ext
     if file_ext not in ALLOWED_UPLOAD_EXTENSIONS:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type. Allowed types: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}",
         )
     return display_name, file_ext
+
+
+def _author_from_name(display_name: str) -> Optional[str]:
+    """"Republic__Plato.txt" -> "Plato", following the Title__Author naming
+    that index_texts uses for the library's books; None without "__"."""
+    stem = os.path.splitext(display_name)[0]
+    if "__" not in stem:
+        return None
+    return stem.split("__", 1)[1].replace("_", " ").strip() or None
 
 
 def _new_upload_path(file_ext: str) -> str:
@@ -412,11 +424,11 @@ def _recent_failures(client: str, now: float) -> list[float]:
         # Still full of recent failures: forget the oldest addresses first
         while len(_failed_answers) > MAX_TRACKED_CLIENTS:
             del _failed_answers[next(iter(_failed_answers))]
-    recent = [t for t in _failed_answers.get(client, []) if now - t < FAILED_ANSWER_WINDOW_SECONDS]
+    # Re-inserted rather than updated in place, so the dict stays ordered by
+    # latest failure and the sweep above drops the stalest addresses first
+    recent = [t for t in _failed_answers.pop(client, []) if now - t < FAILED_ANSWER_WINDOW_SECONDS]
     if recent:
         _failed_answers[client] = recent
-    else:
-        _failed_answers.pop(client, None)
     return recent
 
 
@@ -452,7 +464,8 @@ async def validate_creator(
 
     valid = hmac.compare_digest(user_answer.encode(), creator_name.encode())
     if not valid:
-        _failed_answers.setdefault(client, []).append(now)
+        # Appended at the end of the dict's order (newest failure last)
+        _failed_answers[client] = _failed_answers.pop(client, []) + [now]
     if valid:
         forwarded_proto = http_request.headers.get("x-forwarded-proto", "")
         response.set_cookie(
@@ -583,6 +596,7 @@ async def index_document(file: UploadFile = File(...)):
             sentences=sentences,
             paragraph_indices=paragraph_indices,
             embeddings=embeddings,
+            author=_author_from_name(display_name),
             paragraph_labels=parsed.paragraph_labels,
             paragraph_texts=parsed.paragraph_texts,
         )
@@ -625,10 +639,10 @@ async def index_document_distributed(file: UploadFile = File(...)):
         - file_type: Type of file uploaded
         - sentence_count: Number of sentences indexed
         - paragraph_count: Number of paragraphs detected
-        - processing_time: Total time in seconds
-        - embedding_time: Time spent on embedding generation
-        - throughput: Sentences per second
-        - workers: Number of Ray workers used
+        - message: Status message
+        - performance: total_time, parsing_time, splitting_time,
+          embedding_time and indexing_time (seconds), throughput
+          (sentences per second) and workers (Ray workers used)
     """
     # Check if Ray is enabled
     if distributed_pipeline is None:
@@ -687,6 +701,7 @@ async def index_document_distributed(file: UploadFile = File(...)):
             sentences=sentences,
             paragraph_indices=paragraph_indices,
             embeddings=embeddings,
+            author=_author_from_name(display_name),
             paragraph_labels=parsed.paragraph_labels,
             paragraph_texts=parsed.paragraph_texts,
         )
