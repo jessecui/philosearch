@@ -31,7 +31,7 @@ from typing import Optional, AsyncGenerator
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 from app.services.embedding_service import EmbeddingService
-from app.utils.document_processor import DocumentProcessor
+from app.utils.document_processor import DocumentExtractionError, DocumentProcessor
 from app.services.vector_store import VectorStore
 from app.services.distributed_ingestion import DistributedIngestionPipeline
 from app.services.reranker_service import CrossEncoderReranker
@@ -273,12 +273,29 @@ def _upload_name_and_ext(file: UploadFile) -> tuple[str, str]:
     """
     display_name = os.path.basename((file.filename or "upload").replace("\\", "/"))
     file_ext = os.path.splitext(display_name)[1].lower()
+    # Search results echo the name back to /generate, which caps it at 300;
+    # a "__Author" suffix is kept, so the author survives the cut
+    stem = os.path.splitext(display_name)[0]
+    title, sep, author = stem.partition("__")
+    room = 300 - len(file_ext) - len(sep) - len(author)
+    if room < 1:  # an author name alone over the limit: cut everything
+        title, sep, author, room = stem, "", "", 300 - len(file_ext)
+    display_name = title[:room] + sep + author + file_ext
     if file_ext not in ALLOWED_UPLOAD_EXTENSIONS:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type. Allowed types: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}",
         )
     return display_name, file_ext
+
+
+def _author_from_name(display_name: str) -> Optional[str]:
+    """"Republic__Plato.txt" -> "Plato", following the Title__Author naming
+    that index_texts uses for the library's books; None without "__"."""
+    stem = os.path.splitext(display_name)[0]
+    if "__" not in stem:
+        return None
+    return stem.split("__", 1)[1].replace("_", " ").strip() or None
 
 
 def _new_upload_path(file_ext: str) -> str:
@@ -322,7 +339,6 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=50)
-    deduplicate_paragraphs: bool = True
     use_reranking: bool = False  # Enable 2-stage retrieval with cross-encoder reranking
     top_k_faiss: int = Field(default=50, ge=1, le=200)  # FAISS candidates (stage 1)
     context_window: int = Field(default=2, ge=0, le=5)  # Paragraphs before/after
@@ -350,7 +366,8 @@ class ResultItem(BaseModel):
     paragraph_text: str = Field(max_length=50_000)
     excerpt_text: Optional[str] = Field(default=None, max_length=5_000)
     section_label: Optional[str] = Field(default=None, max_length=300)
-    reranking_score: Optional[float] = None
+    # NaN or infinity would make the SSE sources event invalid JSON
+    reranking_score: Optional[float] = Field(default=None, allow_inf_nan=False)
     context_paragraphs_before: Optional[list[str]] = None
     context_paragraphs_after: Optional[list[str]] = None
 
@@ -383,8 +400,46 @@ async def health():
     return {"status": "healthy"}
 
 
+# Streamed answers must reach the browser token by token: no caching, and no
+# buffering by reverse proxies such as nginx
+SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
 class ValidateCreatorRequest(BaseModel):
     answer: str = Field(max_length=200)
+
+
+# The creator's name works as a password, and names are easy to guess, so
+# wrong answers are limited per client address. Behind a reverse proxy, set
+# uvicorn's FORWARDED_ALLOW_IPS to the proxy's address so each visitor is
+# counted separately rather than all sharing the proxy's address.
+MAX_FAILED_ANSWERS = 10
+FAILED_ANSWER_WINDOW_SECONDS = 15 * 60
+_failed_answers: dict[str, list[float]] = {}
+
+
+# Addresses tracked before stale entries are swept, so many one-off
+# addresses can't grow the table without bound
+MAX_TRACKED_CLIENTS = 10_000
+
+
+def _recent_failures(client: str, now: float) -> list[float]:
+    if len(_failed_answers) > MAX_TRACKED_CLIENTS:
+        for address in list(_failed_answers):
+            _failed_answers[address] = [
+                t for t in _failed_answers[address] if now - t < FAILED_ANSWER_WINDOW_SECONDS
+            ]
+            if not _failed_answers[address]:
+                del _failed_answers[address]
+        # Still full of recent failures: forget the oldest addresses first
+        while len(_failed_answers) > MAX_TRACKED_CLIENTS:
+            del _failed_answers[next(iter(_failed_answers))]
+    # Re-inserted rather than updated in place, so the dict stays ordered by
+    # each address's latest attempt and the sweep above drops the stalest first
+    recent = [t for t in _failed_answers.pop(client, []) if now - t < FAILED_ANSWER_WINDOW_SECONDS]
+    if recent:
+        _failed_answers[client] = recent
+    return recent
 
 
 @app.post("/validate-creator")
@@ -399,7 +454,8 @@ async def validate_creator(
         answer: The user's answer to the creator question
 
     Returns:
-        {"valid": true/false}
+        {"valid": true/false}; 429 after MAX_FAILED_ANSWERS wrong answers from
+        one address within FAILED_ANSWER_WINDOW_SECONDS
     """
     creator_name = os.getenv("CREATOR_NAME", "").strip().replace(" ", "").lower()
     user_answer = request.answer.strip().replace(" ", "").lower()
@@ -409,7 +465,17 @@ async def validate_creator(
             status_code=500, detail="CREATOR_NAME environment variable not configured"
         )
 
+    client = http_request.client.host if http_request.client else "unknown"
+    now = time.time()
+    if len(_recent_failures(client, now)) >= MAX_FAILED_ANSWERS:
+        raise HTTPException(
+            status_code=429, detail="Too many attempts. Please try again later."
+        )
+
     valid = hmac.compare_digest(user_answer.encode(), creator_name.encode())
+    if not valid:
+        # Appended at the end of the dict's order (newest failure last)
+        _failed_answers[client] = _failed_answers.pop(client, []) + [now]
     if valid:
         forwarded_proto = http_request.headers.get("x-forwarded-proto", "")
         response.set_cookie(
@@ -481,6 +547,9 @@ async def embed_document(file: UploadFile = File(...)):
 
     except HTTPException:
         raise
+    except DocumentExtractionError as e:
+        # An unreadable file won't succeed on retry: say why instead of a 500
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise _internal_error(e)
     finally:
@@ -540,7 +609,9 @@ async def index_document(file: UploadFile = File(...)):
             sentences=sentences,
             paragraph_indices=paragraph_indices,
             embeddings=embeddings,
+            author=_author_from_name(display_name),
             paragraph_labels=parsed.paragraph_labels,
+            paragraph_texts=parsed.paragraph_texts,
         )
 
         if not success:
@@ -561,6 +632,9 @@ async def index_document(file: UploadFile = File(...)):
 
     except HTTPException:
         raise
+    except DocumentExtractionError as e:
+        # An unreadable file won't succeed on retry: say why instead of a 500
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise _internal_error(e)
     finally:
@@ -581,10 +655,10 @@ async def index_document_distributed(file: UploadFile = File(...)):
         - file_type: Type of file uploaded
         - sentence_count: Number of sentences indexed
         - paragraph_count: Number of paragraphs detected
-        - processing_time: Total time in seconds
-        - embedding_time: Time spent on embedding generation
-        - throughput: Sentences per second
-        - workers: Number of Ray workers used
+        - message: Status message
+        - performance: total_time, parsing_time, splitting_time,
+          embedding_time and indexing_time (seconds), throughput
+          (sentences per second) and workers (Ray workers used)
     """
     # Check if Ray is enabled
     if distributed_pipeline is None:
@@ -643,7 +717,9 @@ async def index_document_distributed(file: UploadFile = File(...)):
             sentences=sentences,
             paragraph_indices=paragraph_indices,
             embeddings=embeddings,
+            author=_author_from_name(display_name),
             paragraph_labels=parsed.paragraph_labels,
+            paragraph_texts=parsed.paragraph_texts,
         )
         index_time = time.time() - index_start
 
@@ -675,6 +751,9 @@ async def index_document_distributed(file: UploadFile = File(...)):
 
     except HTTPException:
         raise
+    except DocumentExtractionError as e:
+        # An unreadable file won't succeed on retry: say why instead of a 500
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise _internal_error(e)
     finally:
@@ -691,13 +770,14 @@ async def search_documents(request: SearchRequest):
     Args:
         query: Search query text
         top_k: Number of final results to return (default: 5)
-        deduplicate_paragraphs: Return only one result per paragraph (default: True)
         use_reranking: Enable 2-stage retrieval with cross-encoder reranking (default: False)
         top_k_faiss: Number of candidates from FAISS stage (default: 50, only used if use_reranking=True)
-        context_window: Number of paragraphs before/after for context expansion (default: 2)
+        context_window: Number of paragraphs before/after for context expansion
+            (default: 2, only used if use_reranking=True)
 
     Returns:
-        List of search results with matched sentences and paragraph context
+        List of search results, one per passage, with matched sentences and
+        paragraph context
         If use_reranking=True, also includes reranking_score and timing breakdown
     """
     _require_known_doc_ids(request.doc_ids)
@@ -971,7 +1051,9 @@ async def generate_from_results(request: GenerateFromResultsRequest):
                 error_data = {"message": _generation_error_message(e), "code": "generation_error"}
                 yield f"data: {json.dumps({'type': 'error', 'data': error_data})}\n\n"
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_generator(), media_type="text/event-stream", headers=SSE_HEADERS
+        )
 
     except HTTPException:
         raise
@@ -1105,7 +1187,9 @@ async def search_and_generate(request: GenerateRequest):
                 error_data = {"message": _generation_error_message(e), "code": "generation_error"}
                 yield f"data: {json.dumps({'type': 'error', 'data': error_data})}\n\n"
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_generator(), media_type="text/event-stream", headers=SSE_HEADERS
+        )
 
     except HTTPException:
         raise

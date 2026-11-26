@@ -4,7 +4,7 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <img alt="PhiloSearch answering &quot;How should I respond to things outside my control?&quot; with numbered citations to Epictetus, Seneca and Lao Tzu" src="docs/screenshot-light.png">
+  <img alt="PhiloSearch answering &quot;How should I respond to things outside my control?&quot; with numbered citations to Epictetus, Seneca, Aristotle and Lao Tzu" src="docs/screenshot-light.png">
 </picture>
 
 ## Features
@@ -14,7 +14,7 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 - 🎯 **2-Stage Retrieval**: Parent-child FAISS + cross-encoder reranking (nDCG@10 +27.7% over flat search, 88% vs 50% accuracy@1)
 - 🤖 **RAG Generation**: Gemini 3.8 Flash streaming answers with source citations
 - 📄 **Multi-format Support**: PDF, TXT, MD, DOCX
-- ⚡ **Ray Distributed Processing**: 3.74x faster embedding than single-threaded CPU (10 workers)
+- ⚡ **Ray Distributed Processing**: 3.80x faster embedding and indexing than single-threaded CPU (10 workers, excluding their ~6.5s startup)
 - 📌 **Structured Citations**: Short 1–3 sentence excerpts labelled by book and section (e.g. "Meditations, Book 6, §49")
 - 🚀 **Automatic Device Detection**: MPS/CUDA/CPU
 - 🌓 **Light and Dark Themes**: Follows the system setting, with a toggle in the header
@@ -244,7 +244,7 @@ data: {"type":"sources","data":[{"filename":"Tao_Te_Ching__Lao_Tzu.txt","author"
 data: {"type":"token","data":"The "}
 data: {"type":"token","data":"Tao "}
 
-// Final: Timing metrics (/search-and-generate also reports embedding, FAISS and reranking times)
+// Final: Timing metrics (/generate reports only generation_time and total_time)
 data: {"type":"done","data":{"embedding_time":0.01,"faiss_time":0.002,"reranking_time":0.13,"retrieval_time":0.14,"generation_time":2.34,"total_time":2.52}}
 
 // On failure, instead of "done"
@@ -281,17 +281,17 @@ Reranking adds roughly 90 ms per query on Apple MPS in this eval (see the "Reran
 
 ### Ray Distributed Processing
 
-Embedding 19,900 sentences with all-MiniLM-L6-v2 on a 12-core Mac (CPU unless noted):
+Embedding and indexing 19,900 sentences with all-MiniLM-L6-v2 on a 12-core Mac (CPU unless noted; the single-threaded and Ray times include about 0.3s of FAISS indexing):
 
 | Method | Time | Throughput | vs single-threaded |
 |--------|------|------------|--------------------|
-| **Single-threaded CPU** (benchmark baseline) | 29.77s | 669 sent/s | 1.0x |
-| **Multithreaded CPU** (PyTorch default, no Ray) | 11.55s | 1,723 sent/s | 2.6x |
-| **Ray, 10 CPU workers** (excluding 6.6s worker startup) | 7.95s | 2,503 sent/s | **3.74x** (−73.3% latency) |
-| **Ray, 10 CPU workers** (including startup) | 14.57s | 1,366 sent/s | 2.04x (−51.1% latency) |
-| **Apple GPU (MPS), no Ray** | 5.80s | 3,431 sent/s | 5.1x |
+| **Single-threaded CPU** (benchmark baseline) | 28.26s | 704 sent/s | 1.0x |
+| **Multithreaded CPU** (PyTorch default, no Ray) | 11.55s | 1,723 sent/s | 2.4x |
+| **Ray, 10 CPU workers** (excluding 6.5s worker startup) | 7.43s | 2,679 sent/s | **3.80x** (−73.7% latency) |
+| **Ray, 10 CPU workers** (including startup) | 13.94s | 1,428 sent/s | 2.03x (−50.7% latency) |
+| **Apple GPU (MPS), no Ray** | 5.80s | 3,431 sent/s | 4.9x |
 
-The Ray rows are the median of three runs (latency reduction 72.8%, 73.3%, 74.3%); results vary by about ±1 point between runs. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
+The Ray rows are from run 3 of three, the run with the median latency reduction (73.8%, 73.6%, 73.7%; all three are in `test_outputs/eval_ray_ingestion_latency_output.txt`); results vary by about ±1 point between runs. The single-threaded baseline is warmed up before timing, like the Ray workers. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
 
 The table above counts Ray's startup separately. Counting startup for every method, and comparing against PyTorch's own multithreading, shows how large a job has to be before Ray pays off (`eval_embedding_at_scale`, sentences from the library repeated to each size). Both sides use the same 8 cores: PyTorch's default runs 8 threads (one per performance core on the M4 Pro), and each of Ray's 8 workers runs a single thread.
 
@@ -300,7 +300,7 @@ The table above counts Ray's startup separately. Counting startup for every meth
 | 20,000 | 36.2s | 16.4s | 16.3s | 1.00x (−0.5% latency) | 2.23x (−55.1%) |
 | 300,000 | 491.5s | 223.5s | 147.8s | **1.51x (−33.9% latency)** | **3.32x (−69.9%)** |
 
-Ray's ~6s worker startup cancels its speed advantage around 20,000 sentences; by 300,000 it is under 4% of the run. Once running, Ray's workers embed about 55% more sentences per second than PyTorch's threads on the same cores, because each worker processes its own batches instead of splitting every batch across threads. Earlier runs at 300,000 sentences gave 31.8%–35.0% against PyTorch's default, so expect a few points of variation. Adding workers beyond 8 doesn't help: 10 workers ran no faster, since the extra two land on efficiency cores.
+Ray's ~6s worker startup cancels its speed advantage around 20,000 sentences; by 300,000 it is under 4% of the run. Once running, Ray's workers embed about 56% more sentences per second than PyTorch's threads on the same cores at 300,000 sentences (about 38% at 20,000), because each worker processes its own batches instead of splitting every batch across threads. Earlier runs at 300,000 sentences gave 31.8%–35.0% against PyTorch's default, so expect a few points of variation. Adding workers beyond 8 doesn't help: 10 workers ran no faster, since the extra two land on efficiency cores.
 
 `/index-distributed` also runs 8 workers. **Recommendation:** Use `/index-distributed` for CPU-only batches of tens of thousands of sentences or more. Below that, the regular indexing path, which uses PyTorch's multithreading or the GPU, is as fast or faster.
 
@@ -332,6 +332,7 @@ philosearch/
 │   │   │   ├── auth-modal.tsx          # Access prompt
 │   │   │   ├── library-panel.tsx       # Book picker (which books to search)
 │   │   │   ├── book-cover.tsx          # Generated book covers
+│   │   │   ├── logo-mark.tsx           # Header logo (same drawing as the favicon)
 │   │   │   └── ui/                     # UI components
 │   │   └── lib/
 │   │       ├── answer-format.ts        # Renders the answer's Markdown
@@ -339,6 +340,8 @@ philosearch/
 │   │       ├── api.ts                  # API base URL and error helper
 │   │       ├── theme.ts                # Light/dark theme (system setting + toggle)
 │   │       └── utils.ts                # Utility functions
+│   ├── index.html                      # Page shell (sets the theme before first paint)
+│   ├── public/favicon.svg              # Favicon
 │   ├── vite.config.ts                  # Dev proxy: /api -> localhost:8000
 │   └── package.json
 ├── backend/
@@ -359,12 +362,18 @@ philosearch/
 │   │   └── evaluation/
 │   │       ├── eval_faiss_cross_encoder_ndcg.py
 │   │       ├── eval_ray_ingestion_latency.py
-│   │       └── eval_embedding_at_scale.py
+│   │       ├── eval_embedding_at_scale.py
+│   │       ├── eval_philosophy_document.txt # Evaluation corpus (100 passages)
+│   │       └── test_outputs/           # Saved results quoted in this README
 │   ├── data/                           # FAISS index & metadata
 │   ├── texts/                          # Source texts (local, not committed)
 │   ├── .env.example
 │   └── requirements.txt
+├── docs/                               # README screenshots
 ├── Dockerfile
+├── .dockerignore
+├── .env.example                        # Environment settings template (for Docker)
+├── LICENSE
 └── README.md
 ```
 
@@ -385,9 +394,11 @@ The library in `backend/texts/` (filenames are `Title__Author_Name.txt`):
 | Beyond Good and Evil | Friedrich Nietzsche | | `Beyond_Good_and_Evil__Friedrich_Nietzsche.txt` |
 | The Myth of Sisyphus | Albert Camus | Tr. Justin O'Brien (1955) | `The_Myth_of_Sisyphus__Albert_Camus.txt` |
 
-The texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition with front matter and endnotes removed. To add a book, save it as plain text with blank lines between paragraphs, run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`.
+The texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition with front matter and endnotes removed. To add a book, save it in `backend/texts/` as plain text with blank lines between paragraphs (MD, PDF and DOCX also work), run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`. Rebuilding keeps documents uploaded through the API: they are copied over from the current index (re-embedded if `faiss.index` is missing or damaged). If `metadata.json` itself can't be read, the rebuild stops and keeps the previous index; pass `--drop-uploads` to rebuild without the uploads.
 
-**Deploying:** an image built from a clean checkout has no texts or index, so the library starts empty. Supply the texts at build time and run `python -m app.scripts.index_texts` before starting the server.
+**Deploying:** the Dockerfile copies `backend/` as it is and starts the server; it doesn't build an index. An image built from a clean checkout therefore has no texts or index, and the library starts empty. Run `python -m app.scripts.index_texts` locally first, so `backend/data/` is copied into the image, or mount a volume at `/app/backend/data` that holds a built index. An index built inside a running container without a volume is lost when the container is recreated.
+
+Behind a reverse proxy, set the `FORWARDED_ALLOW_IPS` environment variable (read by uvicorn) to the proxy's address. Otherwise every visitor appears to come from the proxy, and the limit on wrong creator-name answers (10 per 15 minutes per address) is shared by everyone.
 
 ---
 
@@ -419,7 +430,7 @@ The texts and the index built from them are listed in `.gitignore` so they stay 
 ## Troubleshooting
 
 **"Gemini generator not initialized"**
-- Check `backend/.env` file exists with `GOOGLE_API_KEY`
+- Check `backend/.env` file exists with `GOOGLE_API_KEY` (in Docker, `.env` files are not copied into the image: pass them at run time, e.g. `docker run --env-file backend/.env ...`)
 - Get API key from https://aistudio.google.com/apikey
 
 **The access prompt keeps reappearing / "Your session expired"**

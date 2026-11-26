@@ -43,17 +43,20 @@ class EmbeddingWorker:
         self.device = device
         print(f"[Worker {worker_id}] Model loaded")
 
-    def embed_batch(self, sentences: List[str]) -> List[List[float]]:
+    def embed_batch(self, sentences: List[str], batch_size: int = 32) -> List[List[float]]:
         """
         Generate embeddings for a batch of sentences.
 
         Args:
             sentences: List of sentences to embed
+            batch_size: Sentences the model encodes at once
 
         Returns:
             List of embedding vectors
         """
-        embeddings = self.model.encode(sentences, convert_to_numpy=True)
+        embeddings = self.model.encode(
+            sentences, batch_size=batch_size, convert_to_numpy=True
+        )
         return embeddings.tolist()
 
 
@@ -71,7 +74,7 @@ class DistributedIngestionPipeline:
 
         Args:
             num_workers: Number of Ray workers for embedding (default: 8 for M4)
-            batch_size: Batch size for each worker
+            batch_size: Sentences each worker's model encodes at once
             model_name: Sentence transformer model name
         """
         self.num_workers = num_workers
@@ -136,7 +139,7 @@ class DistributedIngestionPipeline:
         futures = []
         for i, chunk in enumerate(sentence_chunks):
             worker = self.workers[i % self.num_workers]
-            future = worker.embed_batch.remote(chunk)
+            future = worker.embed_batch.remote(chunk, self.batch_size)
             futures.append(future)
 
         # Gather results

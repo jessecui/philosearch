@@ -1,10 +1,14 @@
 // Parse the model's Markdown-ish answer into blocks: paragraphs, "#" headings,
 // "> " quotes, and bullet / numbered lists. Lists may have blank lines between
 // items, start at any number, and contain indented sub-bullets.
+// What follows an item's first line, in order: paragraphs under the item
+// and sub-lists, which may alternate
+export type ItemPart =
+  | { kind: "text"; text: string }
+  | { kind: "sub"; ordered: boolean; items: string[] };
 export type ListItem = {
   text: string;
-  children: string[];
-  childrenOrdered: boolean;
+  parts: ItemPart[];
   indent: number; // leading whitespace of the item's line
 };
 export type AnswerBlock =
@@ -55,20 +59,28 @@ export function parseAnswer(text: string): AnswerBlock[] {
     const parentIndent = lastIsList && last.items.length ? last.items[last.items.length - 1].indent : 0;
     if ((bullet || ordered) && lastIsList && last.items.length && indent >= parentIndent + 2) {
       const parent = last.items[last.items.length - 1];
-      if (!parent.children.length) parent.childrenOrdered = Boolean(ordered);
-      parent.children.push(ordered ? ordered[2] : bullet![1]);
+      const lastPart = parent.parts[parent.parts.length - 1];
+      const content = ordered ? ordered[2] : bullet![1];
+      // A switch between bullets and numbers starts a new sub-list
+      if (lastPart?.kind === "sub" && lastPart.ordered === Boolean(ordered)) lastPart.items.push(content);
+      else parent.parts.push({ kind: "sub", ordered: Boolean(ordered), items: [content] });
       continue;
     }
     if (!quote) quoteOpen = false;
 
-    // A plain line right after a list item, or indented under it after a
-    // blank line, continues that item ("1. **Stoicism**\n   Accept what...")
+    // A plain line right after a list item continues it ("1. **Stoicism**\n
+    // Accept what..."); indented under it after a blank line, it starts a
+    // paragraph inside the item
     if (
       !ordered && !bullet && !heading && !quote && lastIsList && last.items.length &&
       (!afterBlank || indent > parentIndent)
     ) {
       const item = last.items[last.items.length - 1];
-      item.text += ` ${line}`;
+      const lastPart = item.parts[item.parts.length - 1];
+      if (afterBlank) item.parts.push({ kind: "text", text: line });
+      else if (lastPart?.kind === "sub") lastPart.items[lastPart.items.length - 1] += ` ${line}`;
+      else if (lastPart?.kind === "text") lastPart.text += ` ${line}`;
+      else item.text += ` ${line}`;
       continue;
     }
     if (ordered || bullet) {
@@ -77,12 +89,12 @@ export function parseAnswer(text: string): AnswerBlock[] {
       const content = ordered ? ordered[2] : bullet![1];
       const prev = blocks[blocks.length - 1];
       if (prev && prev.kind === kind) {
-        prev.items.push({ text: content, children: [], childrenOrdered: false, indent });
+        prev.items.push({ text: content, parts: [], indent });
       } else {
         blocks.push({
           kind,
           start: ordered ? parseInt(ordered[1]) : 1,
-          items: [{ text: content, children: [], childrenOrdered: false, indent }],
+          items: [{ text: content, parts: [], indent }],
         });
       }
       continue;

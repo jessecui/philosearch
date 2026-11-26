@@ -3,6 +3,7 @@ import functools
 import numpy as np
 import json
 import os
+import shutil
 import threading
 import time
 from typing import List, Dict, Tuple, Optional, TYPE_CHECKING
@@ -107,6 +108,13 @@ class VectorStore:
         os.makedirs(data_dir, exist_ok=True)
 
         # Initialize or load FAISS index
+        if os.path.exists(self.metadata_path) and not os.path.exists(self.index_path):
+            # Starting empty here would let the next upload overwrite the
+            # metadata of every indexed document
+            raise RuntimeError(
+                f"{self.metadata_path} exists but {self.index_path} is missing. "
+                "Rebuild with `python -m app.scripts.index_texts`."
+            )
         if os.path.exists(self.index_path):
             if not os.path.exists(self.metadata_path):
                 raise RuntimeError(
@@ -155,13 +163,13 @@ class VectorStore:
             self.paragraph_cache = {
                 (parts[0], int(parts[1])): v
                 for k, v in data["paragraph_cache"].items()
-                if (parts := k.split("::"))
+                if (parts := k.rsplit("::", 1))
             }
             # Older indexes have no labels; citations then show no section
             self.paragraph_labels = {
                 (parts[0], int(parts[1])): v
                 for k, v in data.get("paragraph_labels", {}).items()
-                if (parts := k.split("::"))
+                if (parts := k.rsplit("::", 1))
             }
 
     def _rebuild_paragraph_lookup(self):
@@ -234,8 +242,9 @@ class VectorStore:
         """
         All excerpt windows worth scoring for a match: every run of up to
         EXCERPT_MAX_SENTENCES consecutive sentences in the same passage that
-        contains the matched sentence and fits EXCERPT_CHAR_BUDGET, keeping only
-        the largest ones (a window inside another candidate is dropped).
+        contains the matched sentence and fits EXCERPT_CHAR_BUDGET, of the
+        largest size that fits at all: if any 3-sentence window fits, only
+        3-sentence windows are offered; otherwise 2, otherwise the sentence alone.
 
         The matched sentence is often a conclusion ("Thus it is like the Tao.")
         whose key point sits two sentences earlier, so offering the reranker the
@@ -307,20 +316,58 @@ class VectorStore:
         Persist the index and metadata together. Both are written to temp
         files first; only when both writes succeed are they renamed into
         place, back to back, so a failed write (e.g. disk full) leaves the
-        previous pair untouched.
+        previous pair untouched. If the metadata rename fails after the index
+        rename, the previous index is put back (or, on a first save, the new
+        one removed). A crash between the two renames, or a failure while
+        putting the previous index back, can still leave a mismatched pair;
+        startup then trims extra vectors after an add, or stops with an
+        "out of sync" error after a delete (rebuild with
+        `python -m app.scripts.index_texts`).
         """
         index_tmp = f"{self.index_path}.tmp"
         metadata_tmp = f"{self.metadata_path}.tmp"
+        index_backup = f"{self.index_path}.bak"
         try:
             faiss.write_index(self.index, index_tmp)
+            # Flushed to disk before the rename, like the metadata, so a power
+            # loss can't leave a partly written index under the real name
+            with open(index_tmp, "rb+") as f:
+                os.fsync(f.fileno())
             self._write_metadata(metadata_tmp)
         except Exception:
             for tmp in (index_tmp, metadata_tmp):
                 if os.path.exists(tmp):
                     os.remove(tmp)
             raise
-        os.replace(index_tmp, self.index_path)
-        os.replace(metadata_tmp, self.metadata_path)
+        had_index = os.path.exists(self.index_path)
+        try:
+            # A second copy of the previous index, which stays in place: a hard
+            # link where the filesystem allows it, otherwise a real copy
+            if had_index:
+                if os.path.exists(index_backup):
+                    os.remove(index_backup)
+                try:
+                    os.link(self.index_path, index_backup)
+                except OSError:
+                    shutil.copy2(self.index_path, index_backup)
+            os.replace(index_tmp, self.index_path)
+            try:
+                os.replace(metadata_tmp, self.metadata_path)
+            except Exception:
+                if had_index:
+                    os.replace(index_backup, self.index_path)
+                else:
+                    os.remove(self.index_path)
+                raise
+        finally:
+            # Leftovers are only clutter, so a failure to remove one doesn't
+            # turn a completed save into an error
+            for leftover in (index_tmp, metadata_tmp, index_backup):
+                try:
+                    if os.path.exists(leftover):
+                        os.remove(leftover)
+                except OSError:
+                    pass
 
     @_locked
     @_transactional
@@ -334,6 +381,7 @@ class VectorStore:
         embeddings: List[List[float]],
         author: Optional[str] = None,
         paragraph_labels: Optional[Dict[int, str]] = None,
+        paragraph_texts: Optional[Dict[int, str]] = None,
     ) -> bool:
         """
         Index a document with its sentences and embeddings.
@@ -348,6 +396,9 @@ class VectorStore:
             author: Author name (optional)
             paragraph_labels: Section label per paragraph index, e.g.
                 {12: "Book 2, §3"} (optional)
+            paragraph_texts: Display text per paragraph index, with its line
+                breaks (optional; otherwise the paragraph's sentences joined
+                by spaces)
 
         Returns:
             True if successful
@@ -384,14 +435,15 @@ class VectorStore:
         )
 
         # Build paragraph cache (group sentences by paragraph)
-        paragraph_texts: Dict[int, List[str]] = {}
+        paragraph_sentences: Dict[int, List[str]] = {}
         for sent, para_idx in zip(sentences, paragraph_indices):
-            if para_idx not in paragraph_texts:
-                paragraph_texts[para_idx] = []
-            paragraph_texts[para_idx].append(sent)
+            paragraph_sentences.setdefault(para_idx, []).append(sent)
 
-        for para_idx, para_sentences in paragraph_texts.items():
-            self.paragraph_cache[(doc_id, para_idx)] = " ".join(para_sentences)
+        display_texts = paragraph_texts or {}
+        for para_idx, para_sentences in paragraph_sentences.items():
+            self.paragraph_cache[(doc_id, para_idx)] = display_texts.get(
+                para_idx
+            ) or " ".join(para_sentences)
         for para_idx, label in (paragraph_labels or {}).items():
             self.paragraph_labels[(doc_id, para_idx)] = label
 

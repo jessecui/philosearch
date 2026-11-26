@@ -1,4 +1,8 @@
-2026-11-24 00:49:10,656	INFO worker.py:1998 -- Started a local Ray instance. View the dashboard at [1m[32mhttp://127.0.0.1:8265 [39m[22m
+Three runs of eval_ray_ingestion_latency; the README reports run 3, the median.
+
+######## Run 1 of 3 ########
+2026-11-26 02:25:44,989	INFO worker.py:1998 -- Started a local Ray instance. View the dashboard at [1m[32mhttp://127.0.0.1:8265 [39m[22m
+/Users/jessecui/Documents/Projects/project-philo/.venv/lib/python3.13/site-packages/ray/_private/worker.py:2046: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
   warnings.warn(
 Loading eval_philosophy_document.txt...
 Loaded document with 26231 characters
@@ -18,51 +22,193 @@ Extracted 19900 sentences across 10000 paragraphs
 === Single Core CPU Non-Ray (Sequential) Ingestion ===
 Device: cpu
 Clearing FAISS data...
-Embedding time: 29.39s
-FAISS indexing time: 0.37s
-Total time: 29.77s
-Throughput: 668.6 sentences/sec
+Embedding time: 28.26s
+FAISS indexing time: 0.33s
+Total time: 28.58s
+Throughput: 696.2 sentences/sec
 
 === 10 Cores Ray Distributed (CPU Only) Ingestion ===
 Clearing FAISS data...
 Initializing Ray and workers...
 Initializing 10 CPU-based embedding workers...
-[36m(EmbeddingWorker pid=94810)[0m [Worker 10423104c613a88de0706e6b10b79403b205542f268aeb1402039c5b] Loading model: all-MiniLM-L6-v2 on CPU
-[36m(EmbeddingWorker pid=94810)[0m [Worker 10423104c613a88de0706e6b10b79403b205542f268aeb1402039c5b] Model loaded
+[36m(EmbeddingWorker pid=52869)[0m [Worker 5aaf72aad504ef917478e272fc49beaacaaf705fecc08be84984cbb2] Loading model: all-MiniLM-L6-v2 on CPU
+[36m(EmbeddingWorker pid=52869)[0m [Worker 5aaf72aad504ef917478e272fc49beaacaaf705fecc08be84984cbb2] Model loaded
 ✓ 10 workers initialized and ready
-Initialization time: 6.61s
+Initialization time: 6.92s
 
 Distributing 19900 sentences across 10 workers (~1990 sentences per worker)
 Waiting for 10 workers to complete...
-Embedding completed: 19900 sentences in 7.66s (2596.4 sentences/sec)
+Embedding completed: 19900 sentences in 7.25s (2743.3 sentences/sec)
 Indexing to FAISS...
-Embedding time (excluding init): 7.67s (embedding: 7.66s)
-FAISS indexing time: 0.29s
-Total time (excluding init): 7.95s
-Total time (including init): 14.57s
-Throughput: 2502.5 sentences/sec
-[36m(EmbeddingWorker pid=94816)[0m [Worker ca2815ebbd30b1afdb246ce6b3f66c0a8fed1a46e71d1c58f950c8fd] Loading model: all-MiniLM-L6-v2 on CPU[32m [repeated 9x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
-[36m(EmbeddingWorker pid=94814)[0m [Worker 9ab1a863e0c9ce889d80ce1fca198d32690f10316790e540f9e7a842] Model loaded[32m [repeated 9x across cluster][0m
+Embedding time (excluding init): 7.25s (embedding: 7.25s)
+FAISS indexing time: 0.23s
+Total time (excluding init): 7.49s
+Total time (including init): 14.41s
+Throughput: 2657.9 sentences/sec
+[36m(EmbeddingWorker pid=52870)[0m [Worker 73e14e6643ada8dd696e1c7c3d2d3a70491c08b1017573e2f938c511] Loading model: all-MiniLM-L6-v2 on CPU[32m [repeated 9x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(EmbeddingWorker pid=52870)[0m [Worker 73e14e6643ada8dd696e1c7c3d2d3a70491c08b1017573e2f938c511] Model loaded[32m [repeated 9x across cluster][0m
 Ray workers shutdown
 
 === Results (Excluding Initialization) ===
-Speedup: 3.74x
-Latency Reduction: 73.3%
-Throughput Increase: 3.74x
+Speedup: 3.82x
+Latency Reduction: 73.8%
+Throughput Increase: 3.82x
 
 === Results (Including Initialization) ===
-Speedup: 2.04x
-Latency Reduction: 51.1%
-Sequential: 29.77s vs Ray total: 14.57s
+Speedup: 1.98x
+Latency Reduction: 49.6%
+Sequential: 28.58s vs Ray total: 14.41s
 
 === Final Summary ===
-Sequential (non-Ray, CPU): 29.77s, 668.6 sentences/sec
-10 Cores Ray (CPU): 7.95s, 2502.5 sentences/sec
+Sequential (non-Ray, CPU): 28.58s, 696.2 sentences/sec
+10 Cores Ray (CPU): 7.49s, 2657.9 sentences/sec
 
 Excluding initialization:
-  Speedup: 3.74x
-  Latency Reduction: 73.3%
+  Speedup: 3.82x
+  Latency Reduction: 73.8%
 
 Including initialization:
-  Speedup: 2.04x
-  Latency Reduction: 51.1%
+  Speedup: 1.98x
+  Latency Reduction: 49.6%
+
+######## Run 2 of 3 ########
+2026-11-26 02:26:33,511	INFO worker.py:1998 -- Started a local Ray instance. View the dashboard at [1m[32mhttp://127.0.0.1:8265 [39m[22m
+/Users/jessecui/Documents/Projects/project-philo/.venv/lib/python3.13/site-packages/ray/_private/worker.py:2046: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
+  warnings.warn(
+Loading eval_philosophy_document.txt...
+Loaded document with 26231 characters
+Multiplied by 100x = 2623100 total characters
+
+Benchmarking: Single core CPU non-Ray vs 10 cores Ray (both CPU only)
+
+Set PyTorch to use 1 thread(s) for sequential benchmark
+
+Forcing CPU for inference
+Loading embedding model: all-MiniLM-L6-v2 on cpu
+Model loaded successfully. Embedding dimension: 384
+Processing text...
+Adding unique tokens to sentences to prevent caching...
+Extracted 19900 sentences across 10000 paragraphs
+
+=== Single Core CPU Non-Ray (Sequential) Ingestion ===
+Device: cpu
+Clearing FAISS data...
+Embedding time: 28.22s
+FAISS indexing time: 0.31s
+Total time: 28.54s
+Throughput: 697.4 sentences/sec
+
+=== 10 Cores Ray Distributed (CPU Only) Ingestion ===
+Clearing FAISS data...
+Initializing Ray and workers...
+Initializing 10 CPU-based embedding workers...
+[36m(EmbeddingWorker pid=53095)[0m [Worker dc301acac6fa514af392ee0c1560ddc42e2a18d9fe634b847ddc9523] Loading model: all-MiniLM-L6-v2 on CPU
+[36m(EmbeddingWorker pid=53092)[0m [Worker c9a1ed76734b46cff6cf072a15c531fb814672c75561f7f7c6972fb5] Model loaded
+✓ 10 workers initialized and ready
+Initialization time: 6.28s
+
+Distributing 19900 sentences across 10 workers (~1990 sentences per worker)
+Waiting for 10 workers to complete...
+Embedding completed: 19900 sentences in 7.30s (2727.7 sentences/sec)
+Indexing to FAISS...
+Embedding time (excluding init): 7.30s (embedding: 7.30s)
+FAISS indexing time: 0.24s
+Total time (excluding init): 7.53s
+Total time (including init): 13.82s
+Throughput: 2642.0 sentences/sec
+[36m(EmbeddingWorker pid=53099)[0m [Worker 1b7b0d974b731ea9c6a0e2bff05a930c464cbbc1d71e380d1493c0d6] Loading model: all-MiniLM-L6-v2 on CPU[32m [repeated 9x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(EmbeddingWorker pid=53095)[0m [Worker dc301acac6fa514af392ee0c1560ddc42e2a18d9fe634b847ddc9523] Model loaded[32m [repeated 9x across cluster][0m
+Ray workers shutdown
+
+=== Results (Excluding Initialization) ===
+Speedup: 3.79x
+Latency Reduction: 73.6%
+Throughput Increase: 3.79x
+
+=== Results (Including Initialization) ===
+Speedup: 2.07x
+Latency Reduction: 51.6%
+Sequential: 28.54s vs Ray total: 13.82s
+
+=== Final Summary ===
+Sequential (non-Ray, CPU): 28.54s, 697.4 sentences/sec
+10 Cores Ray (CPU): 7.53s, 2642.0 sentences/sec
+
+Excluding initialization:
+  Speedup: 3.79x
+  Latency Reduction: 73.6%
+
+Including initialization:
+  Speedup: 2.07x
+  Latency Reduction: 51.6%
+
+######## Run 3 of 3 ########
+2026-11-26 02:27:21,330	INFO worker.py:1998 -- Started a local Ray instance. View the dashboard at [1m[32mhttp://127.0.0.1:8265 [39m[22m
+/Users/jessecui/Documents/Projects/project-philo/.venv/lib/python3.13/site-packages/ray/_private/worker.py:2046: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
+  warnings.warn(
+Loading eval_philosophy_document.txt...
+Loaded document with 26231 characters
+Multiplied by 100x = 2623100 total characters
+
+Benchmarking: Single core CPU non-Ray vs 10 cores Ray (both CPU only)
+
+Set PyTorch to use 1 thread(s) for sequential benchmark
+
+Forcing CPU for inference
+Loading embedding model: all-MiniLM-L6-v2 on cpu
+Model loaded successfully. Embedding dimension: 384
+Processing text...
+Adding unique tokens to sentences to prevent caching...
+Extracted 19900 sentences across 10000 paragraphs
+
+=== Single Core CPU Non-Ray (Sequential) Ingestion ===
+Device: cpu
+Clearing FAISS data...
+Embedding time: 27.94s
+FAISS indexing time: 0.32s
+Total time: 28.26s
+Throughput: 704.1 sentences/sec
+
+=== 10 Cores Ray Distributed (CPU Only) Ingestion ===
+Clearing FAISS data...
+Initializing Ray and workers...
+Initializing 10 CPU-based embedding workers...
+[36m(EmbeddingWorker pid=53300)[0m [Worker d46df31e164cc51576217aa2f7b6f81d1ae74a2f35769fc8e7a7f528] Loading model: all-MiniLM-L6-v2 on CPU
+[36m(EmbeddingWorker pid=53302)[0m [Worker 9608e47e6f8b65317a4d000b62db8da4bf7e554d746b68a7e0425bcb] Model loaded
+✓ 10 workers initialized and ready
+Initialization time: 6.51s
+
+Distributing 19900 sentences across 10 workers (~1990 sentences per worker)
+Waiting for 10 workers to complete...
+Embedding completed: 19900 sentences in 7.16s (2777.6 sentences/sec)
+Indexing to FAISS...
+Embedding time (excluding init): 7.16s (embedding: 7.16s)
+FAISS indexing time: 0.26s
+Total time (excluding init): 7.43s
+Total time (including init): 13.94s
+Throughput: 2678.7 sentences/sec
+[36m(EmbeddingWorker pid=53296)[0m [Worker 7e08b530af5370f7b87184ac712378e7cb251e62e86288fcc17cd1bc] Loading model: all-MiniLM-L6-v2 on CPU[32m [repeated 9x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(EmbeddingWorker pid=53299)[0m [Worker a9fac6e02a1d0844f1272070cee341fca169f048798142b7607b9433] Model loaded[32m [repeated 9x across cluster][0m
+Ray workers shutdown
+
+=== Results (Excluding Initialization) ===
+Speedup: 3.80x
+Latency Reduction: 73.7%
+Throughput Increase: 3.80x
+
+=== Results (Including Initialization) ===
+Speedup: 2.03x
+Latency Reduction: 50.7%
+Sequential: 28.26s vs Ray total: 13.94s
+
+=== Final Summary ===
+Sequential (non-Ray, CPU): 28.26s, 704.1 sentences/sec
+10 Cores Ray (CPU): 7.43s, 2678.7 sentences/sec
+
+Excluding initialization:
+  Speedup: 3.80x
+  Latency Reduction: 73.7%
+
+Including initialization:
+  Speedup: 2.03x
+  Latency Reduction: 50.7%

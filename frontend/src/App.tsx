@@ -1,6 +1,6 @@
 import Cookies from "js-cookie";
 import { AlertCircle, ChevronDown, Loader2, Moon, Search, Sun } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { AuthModal } from "@/components/auth-modal";
 import { BookCover } from "@/components/book-cover";
@@ -72,25 +72,60 @@ function trimExcerpt(excerpt: string): string {
   return `${head.slice(0, cut).trimEnd()} …`;
 }
 
-// The full passage with the cited excerpt marked, so expanding a source keeps
-// the cited lines in view. The excerpt's sentences are joined by spaces while
-// the passage may break them across lines (verse), so whitespace is matched
-// loosely. If the excerpt isn't found, the passage is shown unmarked.
-function PassageWithExcerpt({ passage, excerpt }: { passage: string; excerpt?: string | null }) {
-  const words = excerpt?.trim().split(/\s+/) ?? [];
-  if (!words.length) return <>{passage}</>;
+// Where the cited excerpt sits in its passage. The excerpt's sentences are
+// joined by spaces while the passage keeps the book's line breaks (verse), and
+// a sentence split before a closing quote ('else!' + '"—This') has no space
+// in the book, so whitespace between words is matched loosely or not at all.
+function findExcerpt(passage: string, excerpt?: string | null): RegExpExecArray | null {
+  const words = excerpt?.trim().split(/\s+/).filter(Boolean) ?? [];
+  if (!words.length) return null;
   const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const match = new RegExp(escaped.join("\\s+")).exec(passage);
-  if (!match) return <>{passage}</>;
-  const end = match.index + match[0].length;
+  return new RegExp(escaped.join("\\s*")).exec(passage);
+}
+
+// Passage text as paragraphs (or stanzas) with a small gap between them rather
+// than a full blank line; verse lines inside a paragraph keep their breaks.
+// With `excerpt`, the cited part is marked, so expanding a source keeps the
+// cited lines in view; if it isn't found, the text is shown unmarked.
+function PassageText({ text, excerpt }: { text: string; excerpt?: string | null }) {
+  const match = findExcerpt(text, excerpt);
+  const pieces = match
+    ? [
+        { text: text.slice(0, match.index), marked: false },
+        { text: match[0], marked: true },
+        { text: text.slice(match.index + match[0].length), marked: false },
+      ]
+    : [{ text, marked: false }];
+  // A marked excerpt may span a paragraph break, so split each piece and
+  // carry the pieces into the paragraphs they fall in
+  const paragraphs: { text: string; marked: boolean }[][] = [[]];
+  for (const piece of pieces) {
+    piece.text.split(/\n[ \t]*\n\s*/).forEach((part, i) => {
+      if (i > 0) paragraphs.push([]);
+      if (part) paragraphs[paragraphs.length - 1].push({ text: part, marked: piece.marked });
+    });
+  }
   return (
-    <>
-      {passage.slice(0, match.index)}
-      <mark className="bg-amber-100 text-gray-900 dark:bg-amber-300/15 dark:text-zinc-100 rounded-sm">
-        {match[0]}
-      </mark>
-      {passage.slice(end)}
-    </>
+    <div className="space-y-3">
+      {paragraphs
+        .filter((para) => para.some((piece) => piece.text.trim()))
+        .map((para, i) => (
+          <p key={i} className="whitespace-pre-line">
+            {para.map((piece, j) =>
+              piece.marked ? (
+                <mark
+                  key={j}
+                  className="bg-amber-100 text-gray-900 dark:bg-amber-300/15 dark:text-zinc-100 rounded-sm"
+                >
+                  {piece.text}
+                </mark>
+              ) : (
+                <Fragment key={j}>{piece.text}</Fragment>
+              ),
+            )}
+          </p>
+        ))}
+    </div>
   );
 }
 
@@ -203,17 +238,20 @@ export default function App() {
 
   useEffect(() => () => streamController.current?.abort(), []);
 
-  // Clear highlight on click anywhere
+  // Clear highlight on the next click or key press anywhere
   useEffect(() => {
     if (highlightedSource === null) return;
 
     const clearHighlight = () => setHighlightedSource(null);
 
-    // Use capture phase to catch click before it bubbles
+    // Use capture phase to catch the event before it bubbles
     window.addEventListener("click", clearHighlight, { capture: true });
+    window.addEventListener("keydown", clearHighlight, { capture: true });
 
-    return () =>
+    return () => {
       window.removeEventListener("click", clearHighlight, { capture: true });
+      window.removeEventListener("keydown", clearHighlight, { capture: true });
+    };
   }, [highlightedSource]);
 
   const scrollToSource = useCallback(
@@ -230,6 +268,8 @@ export default function App() {
         if (element) {
           setHighlightedSource(sourceNum);
           element.scrollIntoView({ behavior: "smooth", block: "center" });
+          // Move keyboard and screen-reader position to the source too
+          element.focus({ preventScroll: true });
         }
       }, 100);
     },
@@ -251,22 +291,26 @@ export default function App() {
         const items = block.items.map((item, j) => (
           <li key={j} className="leading-7">
             {formatInlineText(item.text)}
-            {item.children.length > 0 &&
-              (() => {
-                const SubList = item.childrenOrdered ? "ol" : "ul";
+            {item.parts.map((part, k) => {
+              if (part.kind === "text") {
                 return (
-                  <SubList
-                    className={cn(
-                      "list-outside pl-5 mt-1 space-y-1",
-                      item.childrenOrdered ? "list-decimal" : "list-disc",
-                    )}
-                  >
-                    {item.children.map((child, k) => (
-                      <li key={k}>{formatInlineText(child)}</li>
-                    ))}
-                  </SubList>
+                  <p key={k} className="mt-1">
+                    {formatInlineText(part.text)}
+                  </p>
                 );
-              })()}
+              }
+              const SubList = part.ordered ? "ol" : "ul";
+              return (
+                <SubList
+                  key={k}
+                  className={cn("list-outside pl-5 mt-1 space-y-1", part.ordered ? "list-decimal" : "list-disc")}
+                >
+                  {part.items.map((child, c) => (
+                    <li key={c}>{formatInlineText(child)}</li>
+                  ))}
+                </SubList>
+              );
+            })}
           </li>
         ));
         const listClass = "list-outside pl-5 space-y-1.5 my-3 marker:text-gray-500 dark:marker:text-zinc-500";
@@ -285,9 +329,10 @@ export default function App() {
       }
       if (block.kind === "heading") {
         return (
-          <p key={i} className={cn(spacing, "font-semibold text-gray-900 dark:text-zinc-100")}>
+          // h3: the answer section's own heading is an h2
+          <h3 key={i} className={cn(spacing, "font-semibold text-gray-900 dark:text-zinc-100")}>
             {formatInlineText(block.text)}
-          </p>
+          </h3>
         );
       }
       if (block.kind === "quote") {
@@ -318,9 +363,10 @@ export default function App() {
         // Bold may contain *italic*, even at its end ("**In *Meditations***",
         // closed by the optional third star). Each star inside bold can match
         // only one way, so an unclosed "**" can't trigger exponential
-        // backtracking that would freeze the page.
+        // backtracking that would freeze the page. Italic needs a non-space
+        // just inside each star, so "2 * 3 = 6 and 4 * 5" stays plain.
         const regex =
-          /(\*\*(?=\S)(?:[^*\n]|\*(?!\*))+?\*\*\*?|\*[^*\n]+\*|\[\d+\])/g;
+          /(\*\*(?=\S)(?:[^*\n]|\*(?!\*))+?\*\*\*?|\*(?=[^\s*])[^*\n]*?[^\s*]\*|\[\d+\])/g;
         let match;
 
         while ((match = regex.exec(segment)) !== null) {
@@ -385,6 +431,7 @@ export default function App() {
     setAnswer("");
     setSources([]);
     setExpandedPassages(new Set());
+    setSourcesExpanded(true);
     setHighlightedSource(null);
     setError("");
 
@@ -515,18 +562,21 @@ export default function App() {
         {/* Top bar */}
         <header className="bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="flex items-center gap-2 cursor-pointer"
-            >
-              <LogoMark />
-              <span className="text-[17px] font-semibold text-gray-900 dark:text-zinc-100 tracking-tight">
-                PhiloSearch
-              </span>
-              {/* Spoken name: the visible text plus what the button does */}
-              <span className="sr-only">, start a new search</span>
-            </button>
+            {/* The page's top-level heading; the name doubles as a reset button */}
+            <h1>
+              <button
+                type="button"
+                onClick={handleReset}
+                className="flex items-center gap-2 cursor-pointer"
+              >
+                <LogoMark />
+                <span className="text-[17px] font-semibold text-gray-900 dark:text-zinc-100 tracking-tight">
+                  PhiloSearch
+                </span>
+                {/* Spoken name: the visible text plus what the button does */}
+                <span className="sr-only">, start a new search</span>
+              </button>
+            </h1>
             <span className="hidden sm:block h-5 w-px bg-gray-200 dark:bg-zinc-800" aria-hidden="true" />
             <p className="hidden sm:block text-sm text-gray-500 dark:text-zinc-400 truncate">
               Semantic search and cited answers across classic philosophical texts
@@ -649,12 +699,17 @@ export default function App() {
             </section>
 
             {/* Status */}
+            {/* Announced from a live region that stays mounted (and out of the
+                layout), so screen readers hear the first phase too */}
+            <p role="status" className="sr-only">
+              {isLoading && !answer ? PHASE_LABELS[loadingPhase] : ""}
+            </p>
             {isLoading && !answer && (
               <div
-                role="status"
+                aria-hidden="true"
                 className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg px-5 py-4 flex items-center gap-3 text-sm text-gray-600 dark:text-zinc-400"
               >
-                <Loader2 className="w-4 h-4 animate-spin text-blue-700 dark:text-blue-400" aria-hidden="true" />
+                <Loader2 className="w-4 h-4 animate-spin text-blue-700 dark:text-blue-400" />
                 {PHASE_LABELS[loadingPhase]}
               </div>
             )}
@@ -699,7 +754,7 @@ export default function App() {
                     type="button"
                     onClick={() => setSourcesExpanded(!sourcesExpanded)}
                     aria-expanded={sourcesExpanded}
-                    aria-controls="sources-list"
+                    aria-controls={sourcesExpanded ? "sources-list" : undefined}
                     className="w-full flex items-center justify-between gap-2 px-5 py-3 cursor-pointer"
                   >
                     <span>
@@ -716,12 +771,17 @@ export default function App() {
                     {sources.map((source, idx) => {
                       const book = bookInfo(source.filename, source.author);
                       const label = formatSectionLabel(source.section_label, source.filename);
-                      const excerpt = trimExcerpt(source.excerpt ?? source.text);
+                      // Shown as it appears in the passage, so verse keeps its line breaks
+                      const excerpt = trimExcerpt(
+                        findExcerpt(source.text, source.excerpt)?.[0] ?? source.excerpt ?? source.text,
+                      );
                       const canExpand = excerpt !== source.text;
                       return (
                         <li
                           key={idx}
                           id={`source-${idx + 1}`}
+                          // Focusable from code only, so citations can move focus here
+                          tabIndex={-1}
                           className={cn(
                             "px-5 py-4 transition-colors duration-300 scroll-mt-6",
                             highlightedSource === idx + 1 ? "bg-blue-50/60 dark:bg-blue-500/15" : "bg-white dark:bg-zinc-900",
@@ -731,7 +791,7 @@ export default function App() {
                             <span className="mt-0.5 w-6 h-6 shrink-0 rounded bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 text-xs font-medium flex items-center justify-center">
                               {idx + 1}
                             </span>
-                            <div className="flex-1 min-w-0 space-y-2">
+                            <div className="flex-1 min-w-0 space-y-3">
                               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                 <BookCover book={book} size="sm" />
                                 <span className="text-sm font-medium text-gray-900 dark:text-zinc-100 wrap-anywhere">
@@ -751,17 +811,18 @@ export default function App() {
                                   </span>
                                 )}
                               </div>
-                              <p className="font-serif text-[15px] leading-7 text-gray-700 dark:text-zinc-300 whitespace-pre-line">
+                              <div className="font-serif text-[15px] leading-7 text-gray-700 dark:text-zinc-300">
                                 {expandedPassages.has(idx) ? (
-                                  <PassageWithExcerpt passage={source.text} excerpt={source.excerpt} />
+                                  <PassageText text={source.text} excerpt={source.excerpt} />
                                 ) : (
-                                  excerpt
+                                  <PassageText text={excerpt} />
                                 )}
-                              </p>
+                              </div>
                               {canExpand && (
                                 <button
                                   type="button"
                                   onClick={() => togglePassage(idx)}
+                                  aria-expanded={expandedPassages.has(idx)}
                                   className="text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer"
                                 >
                                   {expandedPassages.has(idx) ? "Show excerpt only" : "Show full passage"}

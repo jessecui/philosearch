@@ -24,7 +24,7 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 WORKDIR /app/backend
 
 # Expose port
-EXPOSE $PORT
+EXPOSE 8000
 
 # Run the app
 # exec so uvicorn is PID 1 and receives SIGTERM for a clean shutdown

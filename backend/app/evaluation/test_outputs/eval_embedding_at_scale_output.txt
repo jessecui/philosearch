@@ -11,13 +11,13 @@ Sentences from backend/texts; times include startup
   Single-threaded CPU                         36.2s (startup 1.4s, 574 sent/s warm)
   PyTorch default multithreading (CPU)        16.4s (startup 1.9s, 1,385 sent/s warm)
   Ray, 8 CPU workers (one thread each)        16.3s (startup 5.8s, 1,911 sent/s warm)
-  Ray vs PyTorch default multithreading: 0.5% faster (1.00x)
-  Ray vs Single-threaded CPU: 55.1% faster (2.23x)
+  Ray vs PyTorch default multithreading: 0.5% less time (1.00x as fast)
+  Ray vs Single-threaded CPU: 55.1% less time (2.23x as fast)
 
 === 300,000 sentences ===
   Single-threaded CPU                        491.5s (startup 1.6s, 612 sent/s warm)
   PyTorch default multithreading (CPU)       223.5s (startup 1.6s, 1,352 sent/s warm)
   Ray, 8 CPU workers (one thread each)       147.8s (startup 5.7s, 2,110 sent/s warm)
-  Ray vs PyTorch default multithreading: 33.9% faster (1.51x)
-  Ray vs Single-threaded CPU: 69.9% faster (3.32x)
+  Ray vs PyTorch default multithreading: 33.9% less time (1.51x as fast)
+  Ray vs Single-threaded CPU: 69.9% less time (3.32x as fast)
 
