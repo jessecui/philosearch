@@ -395,6 +395,11 @@ async def health():
     return {"status": "healthy"}
 
 
+# Streamed answers must reach the browser token by token: no caching, and no
+# buffering by reverse proxies such as nginx
+SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
 class ValidateCreatorRequest(BaseModel):
     answer: str = Field(max_length=200)
 
@@ -1032,7 +1037,9 @@ async def generate_from_results(request: GenerateFromResultsRequest):
                 error_data = {"message": _generation_error_message(e), "code": "generation_error"}
                 yield f"data: {json.dumps({'type': 'error', 'data': error_data})}\n\n"
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_generator(), media_type="text/event-stream", headers=SSE_HEADERS
+        )
 
     except HTTPException:
         raise
@@ -1166,7 +1173,9 @@ async def search_and_generate(request: GenerateRequest):
                 error_data = {"message": _generation_error_message(e), "code": "generation_error"}
                 yield f"data: {json.dumps({'type': 'error', 'data': error_data})}\n\n"
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_generator(), media_type="text/event-stream", headers=SSE_HEADERS
+        )
 
     except HTTPException:
         raise

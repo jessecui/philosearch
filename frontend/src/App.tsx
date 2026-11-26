@@ -426,6 +426,7 @@ export default function App() {
     setAnswer("");
     setSources([]);
     setExpandedPassages(new Set());
+    setSourcesExpanded(true);
     setHighlightedSource(null);
     setError("");
 
@@ -814,6 +815,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   onClick={() => togglePassage(idx)}
+                                  aria-expanded={expandedPassages.has(idx)}
                                   className="text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer"
                                 >
                                   {expandedPassages.has(idx) ? "Show excerpt only" : "Show full passage"}
