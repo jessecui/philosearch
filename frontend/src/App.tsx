@@ -302,6 +302,7 @@ export default function App() {
                   </SubList>
                 );
               })()}
+            {item.textAfter && <p className="mt-1">{formatInlineText(item.textAfter)}</p>}
           </li>
         ));
         const listClass = "list-outside pl-5 space-y-1.5 my-3 marker:text-gray-500 dark:marker:text-zinc-500";
@@ -684,12 +685,17 @@ export default function App() {
             </section>
 
             {/* Status */}
+            {/* Announced from a live region that stays mounted (and out of the
+                layout), so screen readers hear the first phase too */}
+            <p role="status" className="sr-only">
+              {isLoading && !answer ? PHASE_LABELS[loadingPhase] : ""}
+            </p>
             {isLoading && !answer && (
               <div
-                role="status"
+                aria-hidden="true"
                 className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg px-5 py-4 flex items-center gap-3 text-sm text-gray-600 dark:text-zinc-400"
               >
-                <Loader2 className="w-4 h-4 animate-spin text-blue-700 dark:text-blue-400" aria-hidden="true" />
+                <Loader2 className="w-4 h-4 animate-spin text-blue-700 dark:text-blue-400" />
                 {PHASE_LABELS[loadingPhase]}
               </div>
             )}
@@ -734,7 +740,7 @@ export default function App() {
                     type="button"
                     onClick={() => setSourcesExpanded(!sourcesExpanded)}
                     aria-expanded={sourcesExpanded}
-                    aria-controls="sources-list"
+                    aria-controls={sourcesExpanded ? "sources-list" : undefined}
                     className="w-full flex items-center justify-between gap-2 px-5 py-3 cursor-pointer"
                   >
                     <span>

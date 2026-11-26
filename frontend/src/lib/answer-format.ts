@@ -5,6 +5,8 @@ export type ListItem = {
   text: string;
   children: string[];
   childrenOrdered: boolean;
+  textAfter: string; // text under the item that follows its sub-bullets
+
   indent: number; // leading whitespace of the item's line
 };
 export type AnswerBlock =
@@ -68,7 +70,15 @@ export function parseAnswer(text: string): AnswerBlock[] {
       (!afterBlank || indent > parentIndent)
     ) {
       const item = last.items[last.items.length - 1];
-      item.text += ` ${line}`;
+      // Straight after a sub-bullet, the line continues that sub-bullet;
+      // after a blank line it is more of the item, below its sub-bullets
+      if (item.children.length && !afterBlank) {
+        item.children[item.children.length - 1] += ` ${line}`;
+      } else if (item.children.length) {
+        item.textAfter = item.textAfter ? `${item.textAfter} ${line}` : line;
+      } else {
+        item.text += ` ${line}`;
+      }
       continue;
     }
     if (ordered || bullet) {
@@ -77,12 +87,12 @@ export function parseAnswer(text: string): AnswerBlock[] {
       const content = ordered ? ordered[2] : bullet![1];
       const prev = blocks[blocks.length - 1];
       if (prev && prev.kind === kind) {
-        prev.items.push({ text: content, children: [], childrenOrdered: false, indent });
+        prev.items.push({ text: content, children: [], childrenOrdered: false, textAfter: "", indent });
       } else {
         blocks.push({
           kind,
           start: ordered ? parseInt(ordered[1]) : 1,
-          items: [{ text: content, children: [], childrenOrdered: false, indent }],
+          items: [{ text: content, children: [], childrenOrdered: false, textAfter: "", indent }],
         });
       }
       continue;

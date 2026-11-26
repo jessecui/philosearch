@@ -332,6 +332,7 @@ philosearch/
 │   │   │   ├── auth-modal.tsx          # Access prompt
 │   │   │   ├── library-panel.tsx       # Book picker (which books to search)
 │   │   │   ├── book-cover.tsx          # Generated book covers
+│   │   │   ├── logo-mark.tsx           # Header logo (same drawing as the favicon)
 │   │   │   └── ui/                     # UI components
 │   │   └── lib/
 │   │       ├── answer-format.ts        # Renders the answer's Markdown
@@ -339,6 +340,7 @@ philosearch/
 │   │       ├── api.ts                  # API base URL and error helper
 │   │       ├── theme.ts                # Light/dark theme (system setting + toggle)
 │   │       └── utils.ts                # Utility functions
+│   ├── public/favicon.svg              # Favicon
 │   ├── vite.config.ts                  # Dev proxy: /api -> localhost:8000
 │   └── package.json
 ├── backend/

@@ -43,8 +43,9 @@ export function BookCover({
     "?"
   ).toLocaleUpperCase();
 
+  // A span, so the cover can sit inside a button (the library checkboxes)
   return (
-    <div
+    <span
       aria-hidden="true"
       className={cn(
         dimensions,
@@ -58,6 +59,6 @@ export function BookCover({
         {initials}
       </span>
       {size === "md" && <span className="block w-4 h-px bg-white/50" />}
-    </div>
+    </span>
   );
 }
