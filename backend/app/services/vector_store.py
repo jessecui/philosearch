@@ -108,6 +108,13 @@ class VectorStore:
         os.makedirs(data_dir, exist_ok=True)
 
         # Initialize or load FAISS index
+        if os.path.exists(self.metadata_path) and not os.path.exists(self.index_path):
+            # Starting empty here would let the next upload overwrite the
+            # metadata of every indexed document
+            raise RuntimeError(
+                f"{self.metadata_path} exists but {self.index_path} is missing. "
+                "Rebuild with `python -m app.scripts.index_texts`."
+            )
         if os.path.exists(self.index_path):
             if not os.path.exists(self.metadata_path):
                 raise RuntimeError(
@@ -310,10 +317,12 @@ class VectorStore:
         files first; only when both writes succeed are they renamed into
         place, back to back, so a failed write (e.g. disk full) leaves the
         previous pair untouched. If the metadata rename fails after the index
-        rename, the previous index is put back. Only a crash between the two
-        renames can leave a mismatched pair; startup then trims extra vectors
-        after an add, or stops with an "out of sync" error after a delete
-        (rebuild with `python -m app.scripts.index_texts`).
+        rename, the previous index is put back (or, on a first save, the new
+        one removed). A crash between the two renames, or a failure while
+        putting the previous index back, can still leave a mismatched pair;
+        startup then trims extra vectors after an add, or stops with an
+        "out of sync" error after a delete (rebuild with
+        `python -m app.scripts.index_texts`).
         """
         index_tmp = f"{self.index_path}.tmp"
         metadata_tmp = f"{self.metadata_path}.tmp"
@@ -343,11 +352,18 @@ class VectorStore:
             except Exception:
                 if had_index:
                     os.replace(index_backup, self.index_path)
+                else:
+                    os.remove(self.index_path)
                 raise
         finally:
+            # Leftovers are only clutter, so a failure to remove one doesn't
+            # turn a completed save into an error
             for leftover in (index_tmp, metadata_tmp, index_backup):
-                if os.path.exists(leftover):
-                    os.remove(leftover)
+                try:
+                    if os.path.exists(leftover):
+                        os.remove(leftover)
+                except OSError:
+                    pass
 
     @_locked
     @_transactional
