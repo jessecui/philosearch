@@ -4,7 +4,7 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <img alt="PhiloSearch answering &quot;How should I respond to things outside my control?&quot; with numbered citations to Epictetus, Seneca and Lao Tzu" src="docs/screenshot-light.png">
+  <img alt="PhiloSearch answering &quot;How should I respond to things outside my control?&quot; with numbered citations to Epictetus, Seneca, Aristotle and Lao Tzu" src="docs/screenshot-light.png">
 </picture>
 
 ## Features
