@@ -107,12 +107,14 @@ pip install -r requirements.txt
 Copy `backend/.env.example` to `backend/.env` and fill it in:
 
 ```bash
-GEMINI_API_KEY=your-google-ai-api-key   # Gemini (the older name GOOGLE_API_KEY also works)
+GOOGLE_API_KEY=your-google-ai-api-key   # Gemini
 CREATOR_NAME=your-name                  # the name the access prompt asks for
 # Optional:
 # AUTH_SECRET=...            # signs session cookies (derived from the two above if unset)
 # ADMIN_TOKEN=...            # enables upload/delete endpoints (disabled if unset)
 # MAX_UPLOAD_MB=50           # upload size limit for those endpoints, per file (MiB)
+# ALLOWED_ORIGINS=...        # browser origins allowed to call the public endpoints (default: http://localhost:5173)
+# CLIENT_IP_HEADER=X-Real-IP # header holding the visitor's address behind a proxy (Railway: X-Real-IP)
 # ENABLE_RAY=true            # enables /index-distributed
 ```
 
@@ -149,9 +151,8 @@ In development the frontend calls the API through Vite's `/api` proxy (see `fron
 |----------|--------|--------|-------------|
 | `/` | GET | Public | Serves the built frontend (or a health message if `frontend/dist` is missing) |
 | `/health` | GET | Public | Health check |
-| `/login` | POST | Public | Checks the access answer; on success sets the `philosearch_session` cookie (401 if wrong, 429 after too many wrong answers) |
-| `/me` | GET | Public | Whether the request carries a valid session: `{"signed_in": true}` |
-| `/search` | POST | Session | Semantic search with optional reranking |
+| `/validate-creator` | POST | Public | Checks the access answer; on success sets the `philosearch_session` cookie |
+| `/search` | POST | Public | Semantic search with optional reranking |
 | `/search-and-generate` | POST | Session | RAG: retrieve and stream a generated answer |
 | `/generate` | POST | Session | Stream an answer from results returned by `/search` |
 | `/documents` | GET | Public | List indexed documents |
@@ -161,7 +162,7 @@ In development the frontend calls the API through Vite's `/api` proxy (see `fron
 | `/embed` | POST | Admin | Return sentence embeddings for an uploaded document |
 | `/documents/{doc_id}` | DELETE | Admin | Remove a document |
 
-**Session:** an HttpOnly, signed cookie issued by `/login`, valid for 24 hours. **Admin:** send `X-Admin-Token: <ADMIN_TOKEN>`; these endpoints return 403 when `ADMIN_TOKEN` is not set.
+**Session:** an HttpOnly, signed cookie issued by `/validate-creator`, valid for 24 hours. **Admin:** send `X-Admin-Token: <ADMIN_TOKEN>`; these endpoints return 403 when `ADMIN_TOKEN` is not set.
 
 ### Search Parameters (`/search`)
 
@@ -192,19 +193,10 @@ curl -X POST "http://localhost:8000/index" \
   -F "file=@document.pdf"
 ```
 
-### Sign in
-
-`/search`, `/generate` and `/search-and-generate` need a session cookie:
-
-```bash
-curl -c cookies.txt -X POST "http://localhost:8000/login" \
-  -H "Content-Type: application/json" -d '{"answer": "your-name"}'
-```
-
 ### Search with Reranking
 
 ```bash
-curl -b cookies.txt -X POST "http://localhost:8000/search" \
+curl -X POST "http://localhost:8000/search" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "what is consciousness?",
@@ -216,7 +208,11 @@ curl -b cookies.txt -X POST "http://localhost:8000/search" \
 ### RAG: Search & Generate Answer
 
 ```bash
-# Stream an answer (with the session cookie from "Sign in" above)
+# 1. Get a session cookie
+curl -c cookies.txt -X POST "http://localhost:8000/validate-creator" \
+  -H "Content-Type: application/json" -d '{"answer": "your-name"}'
+
+# 2. Stream an answer
 curl -N -b cookies.txt -X POST "http://localhost:8000/search-and-generate" \
   -H "Content-Type: application/json" \
   -d '{
@@ -402,7 +398,7 @@ The texts and the index built from them are listed in `.gitignore` so they stay 
 
 **Deploying:** the Dockerfile copies `backend/` as it is and starts the server; it doesn't build an index. An image built from a clean checkout therefore has no texts or index, and the library starts empty. Run `python -m app.scripts.index_texts` locally first, so `backend/data/` is copied into the image, or mount a volume at `/app/backend/data` that holds a built index. An index built inside a running container without a volume is lost when the container is recreated.
 
-The sign-in gate is in `backend/app/auth.py`. Ten wrong creator-name answers from one address within 15 minutes lock that address out until the window passes. On Railway the visitor's address is read from the `X-Real-IP` header its proxy sets, so each visitor is counted separately; nothing needs configuring. Anywhere else the connecting address is used. Its tests run with `cd backend/app && python -m unittest test_auth`.
+Behind a hosting platform's proxy, set `CLIENT_IP_HEADER` to the header the platform sets to the visitor's address; on Railway that is `X-Real-IP`. Otherwise every visitor appears to come from the proxy, and the limit on wrong creator-name answers (10 per 15 minutes per address) is shared by everyone. Only use a header the platform overwrites, so a visitor can't get around the limit by sending a made-up address, and only when the app can be reached solely through the proxy (on Railway, its public domain rather than a TCP proxy). Don't use uvicorn's `FORWARDED_ALLOW_IPS='*'` instead: it takes the leftmost `X-Forwarded-For` entry, which the visitor controls.
 
 ---
 
@@ -434,17 +430,11 @@ The sign-in gate is in `backend/app/auth.py`. Ten wrong creator-name answers fro
 ## Troubleshooting
 
 **"Gemini generator not initialized"**
-- Check `backend/.env` file exists with `GEMINI_API_KEY` (in Docker, `.env` files are not copied into the image: pass them at run time, e.g. `docker run --env-file backend/.env ...`)
+- Check `backend/.env` file exists with `GOOGLE_API_KEY` (in Docker, `.env` files are not copied into the image: pass them at run time, e.g. `docker run --env-file backend/.env ...`)
 - Get API key from https://aistudio.google.com/apikey
 
 **The access prompt keeps reappearing / "Your session expired"**
-- Sessions last 24 hours. Changing `AUTH_SECRET` signs everyone out; if `AUTH_SECRET` is unset, so does changing `GEMINI_API_KEY` or `CREATOR_NAME`
+- Sessions last 24 hours. Changing `AUTH_SECRET` signs everyone out; if `AUTH_SECRET` is unset, so does changing `GOOGLE_API_KEY` or `CREATOR_NAME`
 
 **Upload or delete returns 403**
 - Set `ADMIN_TOKEN` in `backend/.env` and send it as the `X-Admin-Token` header
-
----
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
