@@ -110,11 +110,12 @@ Copy `backend/.env.example` to `backend/.env` and fill it in:
 GOOGLE_API_KEY=your-google-ai-api-key   # Gemini
 CREATOR_NAME=your-name                  # the name the access prompt asks for
 # Optional:
-# AUTH_SECRET=...     # signs session cookies (derived from the two above if unset)
-# ADMIN_TOKEN=...     # enables upload/delete endpoints (disabled if unset)
-# MAX_UPLOAD_MB=50    # upload size limit for those endpoints, per file (MiB)
-# ALLOWED_ORIGINS=... # browser origins allowed to call the public endpoints (default: http://localhost:5173)
-# ENABLE_RAY=true     # enables /index-distributed
+# AUTH_SECRET=...            # signs session cookies (derived from the two above if unset)
+# ADMIN_TOKEN=...            # enables upload/delete endpoints (disabled if unset)
+# MAX_UPLOAD_MB=50           # upload size limit for those endpoints, per file (MiB)
+# ALLOWED_ORIGINS=...        # browser origins allowed to call the public endpoints (default: http://localhost:5173)
+# CLIENT_IP_HEADER=X-Real-IP # header holding the visitor's address behind a proxy (Railway: X-Real-IP)
+# ENABLE_RAY=true            # enables /index-distributed
 ```
 
 ### 3. Index the Texts
@@ -398,7 +399,7 @@ The texts and the index built from them are listed in `.gitignore` so they stay 
 
 **Deploying:** the Dockerfile copies `backend/` as it is and starts the server; it doesn't build an index. An image built from a clean checkout therefore has no texts or index, and the library starts empty. Run `python -m app.scripts.index_texts` locally first, so `backend/data/` is copied into the image, or mount a volume at `/app/backend/data` that holds a built index. An index built inside a running container without a volume is lost when the container is recreated.
 
-Behind a reverse proxy, set the `FORWARDED_ALLOW_IPS` environment variable (read by uvicorn) to the proxy's address. Otherwise every visitor appears to come from the proxy, and the limit on wrong creator-name answers (10 per 15 minutes per address) is shared by everyone.
+Behind a hosting platform's proxy, set `CLIENT_IP_HEADER` to the header the platform sets to the visitor's address; on Railway that is `X-Real-IP`. Otherwise every visitor appears to come from the proxy, and the limit on wrong creator-name answers (10 per 15 minutes per address) is shared by everyone. Only use a header the platform overwrites, so a visitor can't get around the limit by sending a made-up address, and only when the app can be reached solely through the proxy (on Railway, its public domain rather than a TCP proxy). Don't use uvicorn's `FORWARDED_ALLOW_IPS='*'` instead: it takes the leftmost `X-Forwarded-For` entry, which the visitor controls.
 
 ---
 

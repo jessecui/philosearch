@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import hashlib
 import hmac
+import ipaddress
 import logging
 import os
 import re
@@ -179,7 +180,7 @@ async def require_admin(x_admin_token: str | None = Header(default=None)):
 # is received, to stop anonymous multi-GB uploads.
 def _max_upload_mb() -> int:
     raw = os.getenv("MAX_UPLOAD_MB", "").strip()
-    if raw.isdigit() and int(raw) > 0:
+    if raw.isascii() and raw.isdigit() and int(raw) > 0:
         return int(raw)
     if raw:
         print(f"⚠️  Ignoring invalid MAX_UPLOAD_MB={raw!r}; using 50")
@@ -410,9 +411,7 @@ class ValidateCreatorRequest(BaseModel):
 
 
 # The creator's name works as a password, and names are easy to guess, so
-# wrong answers are limited per client address. Behind a reverse proxy, set
-# uvicorn's FORWARDED_ALLOW_IPS to the proxy's address so each visitor is
-# counted separately rather than all sharing the proxy's address.
+# wrong answers are limited per client address (see _client_address).
 MAX_FAILED_ANSWERS = 10
 FAILED_ANSWER_WINDOW_SECONDS = 15 * 60
 _failed_answers: dict[str, list[float]] = {}
@@ -421,6 +420,51 @@ _failed_answers: dict[str, list[float]] = {}
 # Addresses tracked before stale entries are swept, so many one-off
 # addresses can't grow the table without bound
 MAX_TRACKED_CLIENTS = 10_000
+
+
+# A request header that the hosting platform's proxy sets to the visitor's
+# address, replacing any copy the visitor sent (on Railway, X-Real-IP).
+# Unset when the app is reached directly.
+CLIENT_IP_HEADER = os.getenv("CLIENT_IP_HEADER", "").strip().lower()
+
+
+def _normalize_address(value: str) -> str:
+    """
+    An address without any port, in canonical form: some proxies write
+    "ip:port", and a port that changes with every connection would otherwise
+    make every attempt look like a new visitor.
+    """
+    if value.startswith("[") and "]" in value:  # "[2001:db8::1]:443"
+        value = value[1 : value.index("]")]
+    elif value.count(":") == 1:  # "203.0.113.5:443"
+        value = value.split(":")[0]
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return value
+
+
+def _client_address(request: Request) -> str:
+    """
+    The visitor's address, for counting wrong answers.
+
+    With CLIENT_IP_HEADER set and present, it is that header's value. This is
+    safe only if the proxy overwrites the header and the app can't be reached
+    except through the proxy; otherwise a visitor could send a made-up address
+    with each attempt. X-Forwarded-For isn't used because platforms differ in
+    how many entries they add, and uvicorn's FORWARDED_ALLOW_IPS='*' takes its
+    leftmost entry, which the visitor writes. Without the header, it is the
+    client address uvicorn reports: the connecting address, which behind a
+    proxy is the proxy's and so is shared by every visitor.
+    """
+    if CLIENT_IP_HEADER:
+        values = request.headers.getlist(CLIENT_IP_HEADER)
+        # A single address is expected; if a proxy appended to a list, its
+        # entry is the last one
+        address = values[-1].split(",")[-1].strip() if values else ""
+        if address:
+            return _normalize_address(address)
+    return request.client.host if request.client else "unknown"
 
 
 def _recent_failures(client: str, now: float) -> list[float]:
@@ -465,7 +509,7 @@ async def validate_creator(
             status_code=500, detail="CREATOR_NAME environment variable not configured"
         )
 
-    client = http_request.client.host if http_request.client else "unknown"
+    client = _client_address(http_request)
     now = time.time()
     if len(_recent_failures(client, now)) >= MAX_FAILED_ANSWERS:
         raise HTTPException(
@@ -477,6 +521,8 @@ async def validate_creator(
         # Appended at the end of the dict's order (newest failure last)
         _failed_answers[client] = _failed_answers.pop(client, []) + [now]
     if valid:
+        # A successful sign-in clears this visitor's earlier typos
+        _failed_answers.pop(client, None)
         forwarded_proto = http_request.headers.get("x-forwarded-proto", "")
         response.set_cookie(
             SESSION_COOKIE,
