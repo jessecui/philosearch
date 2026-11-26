@@ -49,7 +49,10 @@ def _carry_over_uploads(vector_store: VectorStore, data_path: Path, drop_uploads
     """
     metadata_path = data_path / "metadata.json"
     if not metadata_path.exists():
-        return 0
+        # A rebuild that died mid-install leaves the previous metadata here
+        metadata_path = data_path / "metadata.json.old"
+        if not metadata_path.exists():
+            return 0
     try:
         with open(metadata_path, encoding="utf-8") as f:
             data = json.load(f)

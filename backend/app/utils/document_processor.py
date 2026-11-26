@@ -270,7 +270,7 @@ class DocumentProcessor:
                 heading, section, in_chapter_mode = _heading_label(popped), None, False
                 text_since_heading = False
                 popped_heading = True
-                bare = _MARKDOWN_HEADING.sub("", popped)
+                bare = re.sub(r"^[*_]+|[*_]+$", "", _MARKDOWN_HEADING.sub("", popped))
                 popped_structural = bool(
                     _STRUCTURAL_HEADING.match(bare) or _NUMBERED_DIVISION.match(bare)
                 )
@@ -555,8 +555,14 @@ _STRUCTURAL_HEADING = re.compile(
 _MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+(?=\S)")
 # A division named by a keyword and one number, in any form: "CHAPTER ONE",
 # "Part Two", "LECTURE 3", "Week 3"
+_NUMBER_WORD = (
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen"
+    r"|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy"
+    r"|eighty|ninety|hundred|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)"
+)
 _NUMBERED_DIVISION = re.compile(
-    r"^(?:chapter|book|part|section|lecture|unit|week|letter)\s+(?:\d+|[ivxlc]+|[a-z]+)\.?$",
+    rf"^(?:chapter|book|part|section|lecture|unit|week|letter)\s+"
+    rf"(?:\d+|[ivxlc]+|{_NUMBER_WORD}(?:[-\s]{_NUMBER_WORD})?)\.?$",
     re.IGNORECASE,
 )
 _HEADING_KEYWORD = re.compile(
