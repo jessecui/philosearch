@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 
+class DocumentExtractionError(ValueError):
+    """The uploaded file can't be read (encrypted PDF, not really a DOCX...)."""
+
+
 class DocumentProcessor:
     """Process different document types and extract text."""
 
@@ -48,7 +52,7 @@ class DocumentProcessor:
             pages = [page.extract_text() or "" for page in reader.pages]
             return "\n".join(p.strip("\n") for p in pages if p.strip()).strip()
         except Exception as e:
-            raise Exception(f"Error extracting text from PDF: {str(e)}")
+            raise DocumentExtractionError(f"Could not read this PDF ({e}). Is it encrypted or damaged?") from e
 
     def _extract_from_text(self, file_path: str) -> str:
         """Extract text from a TXT or MD file."""
@@ -56,7 +60,7 @@ class DocumentProcessor:
             with open(file_path, "rb") as f:
                 return _decode_text(f.read()).strip()
         except Exception as e:
-            raise Exception(f"Error reading text file: {str(e)}")
+            raise DocumentExtractionError("Could not read this text file.") from e
 
     def _extract_from_docx(self, file_path: str) -> str:
         """Extract text from a DOCX file."""
@@ -97,8 +101,9 @@ class DocumentProcessor:
                                 if id(cell._tc) in seen:
                                     continue
                                 seen.add(id(cell._tc))
+                                # The cell's own paragraphs; _docx_text skips text boxes
                                 text = " ".join(
-                                    t for t in (_docx_text(p) for p in cell._tc.iter(_W + "p")) if t
+                                    t for t in (_docx_text(p) for p in cell._tc.iterchildren(_W + "p")) if t
                                 )
                                 if text:
                                     cells.append(text)
@@ -113,7 +118,10 @@ class DocumentProcessor:
             walk(doc.element.body)
             return "\n\n".join(blocks)
         except Exception as e:
-            raise Exception(f"Error extracting text from DOCX: {str(e)}")
+            # The library's message names the server's temp path, so it isn't shown
+            raise DocumentExtractionError(
+                "Could not read this DOCX. Is it a real .docx (not an old .doc)?"
+            ) from e
 
     def split_into_sentences_and_paragraphs(
         self, text: str
@@ -241,7 +249,12 @@ class DocumentProcessor:
             )
             # In wrapped text a heading follows a finished sentence; a
             # heading-like line in mid-sentence is a running page header
-            if line_mode and len(lines) == 1 and _is_heading_line(lines[0], standalone=True, line_mode=True):
+            if (
+                line_mode
+                and len(lines) == 1
+                and not _MARKDOWN_HEADING.match(lines[0])
+                and _is_heading_line(lines[0], standalone=True, line_mode=True)
+            ):
                 before = previous_text_line(raw_idx)
                 if before and not _SENTENCE_END.search(before) and not _is_heading_line(
                     before, standalone=True, line_mode=True
@@ -268,11 +281,14 @@ class DocumentProcessor:
             while len(lines) > 1 and _is_heading_line(
                 lines[0], standalone=False, line_mode=line_mode, next_line=lines[1]
             ):
-                heading, section, in_chapter_mode = _heading_label(lines.pop(0)), None, False
+                popped = lines.pop(0)
+                heading, section, in_chapter_mode = _heading_label(popped), None, False
                 text_since_heading = False
-                popped_heading = True
-            # The rest of a heading-only paragraph is its title
-            # ("CHAPTER I.\nThe Period" -> "Chapter I: The Period")
+                popped_heading = bool(_STRUCTURAL_HEADING.match(popped))
+            # After a "CHAPTER I." style heading, the rest of a heading-only
+            # paragraph is its title ("CHAPTER I.\nThe Period" -> "Chapter I:
+            # The Period"); under a named heading ("## Sources\nPlato,
+            # Republic") the line is text
             if (
                 popped_heading
                 and len(lines) == 1
@@ -419,7 +435,7 @@ class DocumentProcessor:
         current_para_idx = 0
 
         for passage in passages:
-            # A long block of hard-wrapped prose (a PDF page, a DOCX section) has
+            # A long block of hard-wrapped prose (a PDF page) has
             # no author paragraph breaks to follow, so split it at sentence
             # boundaries into passages of about MAX_PASSAGE_WORDS words
             chunk_words = 0
@@ -494,7 +510,7 @@ MAX_SENTENCE_WORDS = 1000
 # such as Chinese, or very long words); the library's longest is ~2,700. The
 # API accepts excerpts of up to 5,000 characters, and an excerpt is never
 # shorter than its sentence.
-MAX_SENTENCE_CHARS = 5000
+MAX_SENTENCE_CHARS = 4950  # leaves room for carried section numbers ("LXXXVIII. ")
 # A passage longer than this many characters is split like a long one
 MAX_UNSPLIT_PASSAGE_CHARS = 20000
 # Unnumbered paragraphs shorter than this are joined to the previous passage
@@ -688,13 +704,15 @@ def _docx_text_boxes(p_element) -> List:
     """Text boxes in a paragraph, skipping the fallback copy Word also stores."""
     boxes = []
     for box in p_element.iter(_W + "txbxContent"):
-        parent, fallback = box.getparent(), False
+        # Skip Word's fallback copy, and boxes inside another box (found again
+        # when that box's own paragraphs are walked)
+        parent, skip = box.getparent(), False
         while parent is not None and parent is not p_element:
-            if parent.tag == _MC + "Fallback":
-                fallback = True
+            if parent.tag in (_MC + "Fallback", _W + "txbxContent"):
+                skip = True
                 break
             parent = parent.getparent()
-        if not fallback:
+        if not skip:
             boxes.append(box)
     return boxes
 
@@ -707,6 +725,8 @@ def _decode_text(data: bytes) -> str:
     are dropped); otherwise it is taken as Windows "ANSI" (cp1252), with
     latin-1 as the last resort.
     """
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        return data.decode("utf-32")
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         return data.decode("utf-16")
     try:
@@ -718,7 +738,7 @@ def _decode_text(data: bytes) -> str:
     lenient = data.decode("utf-8-sig", errors="replace")
     bad = lenient.count("\ufffd")
     valid_non_ascii = sum(1 for c in lenient if ord(c) > 0x7F) - bad
-    if valid_non_ascii > bad:
+    if valid_non_ascii and valid_non_ascii >= bad:
         return lenient.replace("\ufffd", "")
     try:
         return data.decode("cp1252")
@@ -834,7 +854,9 @@ def _heading_label(line: str) -> str:
     caps = 0
     while caps < len(words) and not any(c.islower() for c in words[caps]):
         caps += 1
-    if 0 < caps < len(words) and not words[0].endswith(":") and any(
+    # Two or more such words: one ("A Theory of Justice", "AI and Ethics") is
+    # just the first word of a title-case heading
+    if 1 < caps < len(words) and not words[0].endswith(":") and any(
         c.isalpha() for w in words[:caps] for c in w
     ):
         rest = " ".join(words[caps:])
@@ -854,14 +876,14 @@ _ROMAN_NUMERAL = re.compile(r"^(?=[IVXLC])C{0,3}(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0
 
 def _title_case(text: str) -> str:
     """Title case for an all-caps heading. Roman numerals ("II.") and
-    abbreviations ("U.S.", "Q&A") stay in capitals, and a word after a
+    abbreviations ("U.S.", "Q&A") stay in capitals (but "PLATO'S" -> "Plato's"), and a word after a
     period or colon starts a new phrase ("III. A New Hope")."""
     out: List[str] = []
     phrase_start = True
     words = text.split()
     for i, word in enumerate(words):
         core = word.strip(".,:;!?()[]\"'“”‘’")
-        if core and (_ROMAN_NUMERAL.match(core) or re.search(r"[A-Za-z][.&'][A-Za-z]", core)):
+        if core and (_ROMAN_NUMERAL.match(core) or re.search(r"[A-Za-z][.&][A-Za-z]", core)):
             out.append(word)
         # Small words stay lowercase, except first and last ("Appendix A")
         elif not phrase_start and i < len(words) - 1 and word.lower() in _SMALL_WORDS:

@@ -31,7 +31,7 @@ from typing import Optional, AsyncGenerator
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 from app.services.embedding_service import EmbeddingService
-from app.utils.document_processor import DocumentProcessor
+from app.utils.document_processor import DocumentExtractionError, DocumentProcessor
 from app.services.vector_store import VectorStore
 from app.services.distributed_ingestion import DistributedIngestionPipeline
 from app.services.reranker_service import CrossEncoderReranker
@@ -430,7 +430,7 @@ def _recent_failures(client: str, now: float) -> list[float]:
         while len(_failed_answers) > MAX_TRACKED_CLIENTS:
             del _failed_answers[next(iter(_failed_answers))]
     # Re-inserted rather than updated in place, so the dict stays ordered by
-    # latest failure and the sweep above drops the stalest addresses first
+    # each address's latest attempt and the sweep above drops the stalest first
     recent = [t for t in _failed_answers.pop(client, []) if now - t < FAILED_ANSWER_WINDOW_SECONDS]
     if recent:
         _failed_answers[client] = recent
@@ -542,6 +542,9 @@ async def embed_document(file: UploadFile = File(...)):
 
     except HTTPException:
         raise
+    except DocumentExtractionError as e:
+        # An unreadable file won't succeed on retry: say why instead of a 500
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise _internal_error(e)
     finally:
@@ -624,6 +627,9 @@ async def index_document(file: UploadFile = File(...)):
 
     except HTTPException:
         raise
+    except DocumentExtractionError as e:
+        # An unreadable file won't succeed on retry: say why instead of a 500
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise _internal_error(e)
     finally:
@@ -740,6 +746,9 @@ async def index_document_distributed(file: UploadFile = File(...)):
 
     except HTTPException:
         raise
+    except DocumentExtractionError as e:
+        # An unreadable file won't succeed on retry: say why instead of a 500
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise _internal_error(e)
     finally:
