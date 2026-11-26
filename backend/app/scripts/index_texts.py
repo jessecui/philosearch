@@ -204,7 +204,8 @@ def index_texts_directory(
 
     # Swap the new index in only if every non-empty file was indexed.
     # A running server keeps its old index in memory: restart it afterwards.
-    if files_processed > 0 and files_processed + files_skipped == len(text_files):
+    installed = files_processed > 0 and files_processed + files_skipped == len(text_files)
+    if installed:
         # Move the old metadata out first: if the run dies between the renames,
         # startup finds no metadata.json and fails loudly instead of pairing the
         # new vectors with the old corpus's metadata
@@ -220,13 +221,16 @@ def index_texts_directory(
     else:
         shutil.rmtree(staging_path, ignore_errors=True)
         failed = len(text_files) - files_processed - files_skipped
-        print(
-            f"\n⚠️  {failed} file(s) failed; kept the previous index in {data_path}"
+        reason = (
+            f"{failed} file(s) failed"
+            if failed
+            else f"no file had text to index ({files_skipped} skipped)"
         )
+        print(f"\n⚠️  {reason}; kept the previous index in {data_path}")
 
     # Print comprehensive summary
     print(f"\n{'='*70}")
-    print(f"✅ INDEXING COMPLETE!")
+    print("✅ INDEXING COMPLETE!" if installed else "❌ INDEXING FAILED: the previous index was kept")
     print(f"{'='*70}")
     print(f"\n📊 Processing Statistics:")
     print(f"  Files processed:      {files_processed}/{len(text_files)}")
@@ -262,13 +266,15 @@ def index_texts_directory(
     )
     print(f"  Workers used:         {num_workers}")
 
-    print(f"\n💾 Output Files:")
-    print(f"  Index:                {data_path / 'faiss.index'}")
-    print(f"  Metadata:             {data_path / 'metadata.json'}")
+    if installed:
+        print(f"\n💾 Output Files:")
+        print(f"  Index:                {data_path / 'faiss.index'}")
+        print(f"  Metadata:             {data_path / 'metadata.json'}")
 
-    # Print indexed documents
+    # Documents in this run (installed only if the run succeeded)
     docs = vector_store.list_documents()
-    print(f"\n📚 Indexed Documents ({len(docs)}):")
+    title = "Indexed Documents" if installed else "Documents in the discarded run"
+    print(f"\n📚 {title} ({len(docs)}):")
     for doc in docs:
         print(
             f"  - {doc.filename:40} {doc.total_sentences:>5} sentences, {doc.total_paragraphs:>4} paragraphs"

@@ -67,10 +67,9 @@ class DocumentProcessor:
         """Extract text from a DOCX file."""
         try:
             doc = Document(file_path)
-            text = ""
-            for paragraph in doc.paragraphs:
-                text += paragraph.text + "\n"
-            return text.strip()
+            # Each DOCX paragraph is a real paragraph (or heading), so they are
+            # separated by a blank line, as in the books' text files
+            return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
         except Exception as e:
             raise Exception(f"Error extracting text from DOCX: {str(e)}")
 
@@ -99,10 +98,16 @@ class DocumentProcessor:
         - Numbered sections ("XLIX.", "63.", "52.") and bare chapter numbers
           (Tao Te Ching) always start a new passage and set its section label.
           The number is removed from the passage text, since the label shows it.
-        - Numbered footnotes ("5 Apropos of ..."), asterisk note markers and
-          inline "[Footnote: ...]" notes are dropped.
+          Bare chapter numbers must count up from 1; other bare numbers are
+          page numbers and are dropped.
+        - Markdown "#" headings are headings; an attribution line
+          ("— Seneca") never is.
+        - Runs of numbered footnotes ("5 Apropos of ...") that end a chapter,
+          asterisk note markers and inline "[Footnote: ...]" notes are dropped.
+          A numbered list in the middle of prose is kept.
         - A paragraph starting in lowercase finishes the previous sentence
-          (prose resuming after a quoted verse), so it joins that passage.
+          (prose resuming after a quoted verse), so it joins that passage, up
+          to twice MAX_PASSAGE_WORDS when the previous one stops mid-sentence.
         - A paragraph opening on a linking word ("Similarly, ...", "But ...")
           joins the previous passage when both fit within MAX_PASSAGE_WORDS.
         - Short fragments (epigraphs, verse lines, "And this third:") are joined
@@ -118,6 +123,7 @@ class DocumentProcessor:
         """
         if not text or not text.strip():
             return ParsedDocument([], [], {})
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
 
         # A blank line may contain spaces or tabs (common in exported text)
         raw_paragraphs = re.split(r"\n[ \t]*\n", text)
@@ -126,13 +132,15 @@ class DocumentProcessor:
         # unambiguous headings are recognised and footnote stripping is off
         line_mode = len(raw_paragraphs) == 1
         if line_mode:
-            raw_paragraphs = text.split("\n")
+            # Rejoin words hyphenated across lines ("philoso-\nphy")
+            raw_paragraphs = _LINE_END_HYPHEN.sub("", text).split("\n")
 
         heading: Optional[str] = None
         section: Optional[str] = None
         in_chapter_mode = False  # True while inside a bare-numbered chapter
         pending_section_start = False  # a bare chapter number stood alone
         last_footnote = 0  # number of the footnote just before, 0 if none
+        last_chapter = 0  # number of the last bare-numbered chapter, 0 if none
         seen_roman_section = False
         passages: List[dict] = []  # {"label": str | None, "parts": [str], "words": int}
 
@@ -147,10 +155,14 @@ class DocumentProcessor:
             if not lines:
                 continue
 
-            # A chapter number on its own ("1" then a blank line, then text)
+            # A chapter number on its own ("1" then a blank line, then text).
+            # Chapters count up from 1, so any other bare number is a page
+            # number, as is every bare number in line mode; all are dropped.
             if len(lines) == 1 and _CHAPTER_NUMBER_LINE.match(lines[0]):
-                if not line_mode:  # in line mode these are usually page numbers
-                    section = f"Chapter {int(lines[0])}"
+                number = int(lines[0])
+                if not line_mode and number in (1, last_chapter + 1):
+                    section = f"Chapter {number}"
+                    last_chapter = number
                     in_chapter_mode = pending_section_start = True
                 continue
 
@@ -181,21 +193,19 @@ class DocumentProcessor:
             starts_section = pending_section_start
             pending_section_start = False
             if _CHAPTER_NUMBER_LINE.match(lines[0]) and len(lines) > 1:
-                section = f"Chapter {int(lines.pop(0))}"
-                in_chapter_mode = starts_section = True
+                number = int(lines.pop(0))
+                if not line_mode and number in (1, last_chapter + 1):
+                    section = f"Chapter {number}"
+                    last_chapter = number
+                    in_chapter_mode = starts_section = True
             body = "\n".join(lines)
 
-            # Footnotes come in runs numbered 1, 2, 3 ...; a lone "12 Angry Men
-            # is a film..." is prose, not a footnote
+            # Footnotes come in runs numbered 1, 2, 3 ... at the end of a
+            # chapter; a lone "12 Angry Men is a film..." or a numbered list
+            # in the middle of prose ("1 Cup of flour") is kept as text
             footnote = None if line_mode else _FOOTNOTE.match(body)
             if footnote and int(footnote.group(1)) == 1:
-                # A run must actually continue: "1 In the beginning..." on its
-                # own is prose. Look at the next non-empty paragraph for "2 ...".
-                following_text = next(
-                    (r.strip() for r in raw_paragraphs[raw_idx + 1:] if r.strip()), ""
-                )
-                next_note = _FOOTNOTE.match(following_text)
-                if not (next_note and int(next_note.group(1)) == 2):
+                if not _is_footnote_run(raw_paragraphs, raw_idx):
                     footnote = None
             if footnote and int(footnote.group(1)) in (1, last_footnote + 1):
                 last_footnote = int(footnote.group(1))
@@ -209,6 +219,15 @@ class DocumentProcessor:
                 # has not used roman section numbers yet
                 m = None
             m = m or _ARABIC_SECTION.match(body)
+            if m and line_mode and raw_idx > 0:
+                # In wrapped text a line can start with a number mid-sentence
+                # ("...until the year\n476. After that..."); a section starts
+                # only after a sentence or heading has ended
+                before = raw_paragraphs[raw_idx - 1].strip()
+                if before and not _SENTENCE_END.search(before) and not _is_heading_line(
+                    before, standalone=True, line_mode=True
+                ):
+                    m = None
             if m and not starts_section:
                 if m.re is _ROMAN_SECTION:
                     seen_roman_section = True
@@ -227,11 +246,15 @@ class DocumentProcessor:
             # Notes whose text isn't in the file ("those* who", "chriae *") or
             # that interrupt the author mid-sentence ("[Footnote: ...]")
             if not line_mode:
-                body = _NOTE_MARKER.sub("", body)
+                # A paragraph with markdown emphasis ("*a* point") keeps its asterisks
+                if not _EMPHASIS_OPENER.search(body):
+                    body = _NOTE_MARKER.sub("", body)
                 body = _INLINE_FOOTNOTE.sub("", body).strip()
                 if not body:
                     continue
 
+            if _is_wrapped_prose(lines):
+                body = _LINE_END_HYPHEN.sub("", body)
             words = len(body.split())
             # The passage as shown to readers: verse keeps its line breaks, while
             # hard-wrapped prose is unwrapped into one paragraph
@@ -241,12 +264,17 @@ class DocumentProcessor:
             fits = prev is not None and prev["words"] + words <= MAX_PASSAGE_WORDS
             # A paragraph opening in lowercase finishes the sentence before it,
             # typically prose resuming after a quoted verse ("...long hence,"
-            # / "according to our Virgil, who..."). It joins regardless of
-            # length only when the previous paragraph really stops mid-sentence,
-            # so a document written all in lowercase isn't merged into one passage.
+            # / "according to our Virgil, who..."). When the previous paragraph
+            # really stops mid-sentence it may grow the passage to twice the
+            # usual limit; otherwise it joins only if both fit, so a document
+            # written all in lowercase isn't merged into one passage.
             continues_sentence = body[:1].islower() and (
                 fits
-                or (prev is not None and not _SENTENCE_END.search(prev["parts"][-1]))
+                or (
+                    prev is not None
+                    and not _SENTENCE_END.search(prev["parts"][-1])
+                    and prev["words"] + words <= 2 * MAX_PASSAGE_WORDS
+                )
             )
             # A paragraph opening on a linking word ("Similarly, people who...",
             # "But it is not...") answers the paragraph before it, so it joins
@@ -364,6 +392,10 @@ LEAD_IN_WORD = re.compile(
 )
 # Text that ends a sentence: "...done." / "...it?”"
 _SENTENCE_END = re.compile(r"[.!?…][\"”’')\]]*\s*$")
+# A word hyphenated across a line break: "philoso-\nphy"
+_LINE_END_HYPHEN = re.compile(r"(?<=[a-z])-\n(?=[a-z])")
+# An asterisk opening markdown emphasis: "*a* point", "**bold**"
+_EMPHASIS_OPENER = re.compile(r"(?:^|\s)\*+[^\s*]")
 # An asterisk note marker: "those* who", "chriae * to learn", "honey’.*".
 # A single asterisk after a word or punctuation, so "2 * 3" and markdown
 # "**bold**" are left alone.
@@ -380,6 +412,7 @@ _STRUCTURAL_HEADING = re.compile(
     r"[.:]?(?:\s+(?P<title>.+))?$",
     re.IGNORECASE,
 )
+_MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+(?=\S)")
 _HEADING_KEYWORD = re.compile(
     r"^(section|chapter|book|part|appendix|preface|introduction)\b", re.IGNORECASE
 )
@@ -422,6 +455,12 @@ def _is_heading_line(
             the line is prose.
     """
     words = line.split()
+    # Markdown: "# Notes", "## What is virtue?"
+    if _MARKDOWN_HEADING.match(line) and len(line) <= 160:
+        return True
+    # An attribution ("— Friedrich Nietzsche") belongs to the quotation above
+    if line[:1] in "—–-~":
+        return False
     # "Letter 14: On the Reasons for Withdrawing from the World" (Seneca):
     # the numbered prefix is unambiguous, so the title may be any case or length
     if _LETTER_HEADING.match(line) and len(words) <= 24 and len(line) <= 160:
@@ -468,6 +507,34 @@ def _is_heading_line(
     return title_case and (standalone or bool(_HEADING_KEYWORD.match(line)))
 
 
+def _is_footnote_run(raw_paragraphs: List[str], start: int) -> bool:
+    """
+    True when the paragraph at `start` ("1 From the point of view...") opens a
+    run of footnotes: notes numbered 1, 2, 3 ... that end a chapter, so the run
+    is followed by a heading, a chapter number, another run, or the end of the
+    text. A numbered list in the middle of prose is followed by more prose.
+    """
+    paragraphs = [p.strip() for p in raw_paragraphs[start:] if p.strip()]
+    expected, i = 1, 0
+    while i < len(paragraphs):
+        m = _FOOTNOTE.match(paragraphs[i])
+        if not (m and int(m.group(1)) == expected):
+            break
+        expected, i = expected + 1, i + 1
+    if expected <= 2:  # a single "1 ..." is prose
+        return False
+    if i == len(paragraphs):
+        return True
+    after = paragraphs[i]
+    first_line = after.split("\n")[0].strip()
+    if _CHAPTER_NUMBER_LINE.match(first_line):
+        return True
+    m = _FOOTNOTE.match(after)
+    if m and int(m.group(1)) == 1:
+        return True
+    return "\n" not in after and _is_heading_line(after, standalone=True)
+
+
 def _is_wrapped_prose(lines: List[str]) -> bool:
     """
     True for a block of hard-wrapped prose: many lines of similar, moderate
@@ -483,6 +550,7 @@ def _is_wrapped_prose(lines: List[str]) -> bool:
 
 def _heading_label(line: str) -> str:
     """Turn a raw heading into a short citation label."""
+    line = _MARKDOWN_HEADING.sub("", line)
     upper = line.upper()
     m = re.match(r"^(?:THE|HIS) (\w+) BOOK", upper)
     if m and m.group(1) in _ORDINALS:
