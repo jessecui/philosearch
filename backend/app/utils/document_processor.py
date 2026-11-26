@@ -53,19 +53,8 @@ class DocumentProcessor:
     def _extract_from_text(self, file_path: str) -> str:
         """Extract text from a TXT or MD file."""
         try:
-            # utf-8-sig also removes a byte-order mark
-            with open(file_path, "r", encoding="utf-8-sig") as f:
-                return f.read().strip()
-        except UnicodeDecodeError:
-            # Not UTF-8: most likely Windows "ANSI" (curly quotes and dashes in
-            # cp1252); latin-1 decodes any byte as a last resort
-            for encoding in ("cp1252", "latin-1"):
-                try:
-                    with open(file_path, "r", encoding=encoding) as f:
-                        return f.read().strip()
-                except UnicodeDecodeError:
-                    continue
-            raise Exception("Error reading text file: unknown encoding")
+            with open(file_path, "rb") as f:
+                return _decode_text(f.read()).strip()
         except Exception as e:
             raise Exception(f"Error reading text file: {str(e)}")
 
@@ -79,30 +68,44 @@ class DocumentProcessor:
             # items get a bullet, so neither is mistaken for the other. Tables
             # are kept in document order, one row per line.
             blocks: List[str] = []
-            for child in doc.element.body.iterchildren():
-                tag = child.tag.rsplit("}", 1)[-1]
-                if tag == "p":
-                    paragraph = Paragraph(child, doc)
-                    text = paragraph.text.strip()
-                    if not text:
-                        continue
-                    style = (paragraph.style.name if paragraph.style is not None else "") or ""
-                    if style == "Title" or style.startswith("Heading"):
-                        text = f"# {text}"
-                    elif style.startswith("List"):
-                        text = f"• {text}"
-                    blocks.append(text)
-                elif tag == "tbl":
-                    rows = []
-                    for row in Table(child, doc).rows:
-                        cells = []
-                        for cell in row.cells:  # merged cells repeat; keep one
-                            if cell.text.strip() and cell.text.strip() not in cells:
-                                cells.append(cell.text.strip())
-                        if cells:
-                            rows.append(" | ".join(cells))
-                    if rows:
-                        blocks.append("\n".join(rows))
+
+            def walk(container) -> None:
+                for child in container.iterchildren():
+                    tag = child.tag.rsplit("}", 1)[-1]
+                    if tag == "p":
+                        paragraph = Paragraph(child, doc)
+                        text = _docx_text(child)
+                        if not text:
+                            continue
+                        style = (paragraph.style.name if paragraph.style is not None else "") or ""
+                        if style == "Title" or style.startswith("Heading"):
+                            text = f"# {text}"
+                        elif style.startswith("List"):
+                            text = f"• {text}"
+                        blocks.append(text)
+                    elif tag == "tbl":
+                        rows = []
+                        for row in Table(child, doc).rows:
+                            cells, seen = [], set()
+                            for cell in row.cells:
+                                # A merged cell appears once per grid column; keep it once
+                                if id(cell._tc) in seen:
+                                    continue
+                                seen.add(id(cell._tc))
+                                text = " ".join(
+                                    t for t in (_docx_text(p) for p in cell._tc.iter(_W + "p")) if t
+                                )
+                                if text:
+                                    cells.append(text)
+                            if cells:
+                                rows.append(" | ".join(cells))
+                        if rows:
+                            blocks.append("\n".join(rows))
+                    elif tag in ("sdt", "sdtContent", "ins", "customXml", "smartTag"):
+                        # Content controls and tracked insertions wrap paragraphs
+                        walk(child)
+
+            walk(doc.element.body)
             return "\n\n".join(blocks)
         except Exception as e:
             raise Exception(f"Error extracting text from DOCX: {str(e)}")
@@ -164,7 +167,7 @@ class DocumentProcessor:
 
         # A blank line may contain spaces, tabs or non-breaking spaces
         raw_paragraphs = re.split(r"\n[^\S\n]*\n", text)
-        # Text without blank lines (typical of PDF/DOCX extraction) is split per
+        # Text without blank lines (typical of PDF extraction) is split per
         # line; each line is then usually part of a wrapped sentence, so only
         # unambiguous headings are recognised and footnote stripping is off
         line_mode = len(raw_paragraphs) == 1
@@ -231,17 +234,22 @@ class DocumentProcessor:
                 if line_mode and raw_idx + 1 < len(raw_paragraphs)
                 else None
             )
-            if len(lines) == 1 and _is_heading_line(
+            # In wrapped text a heading follows a finished sentence; a
+            # heading-like line in mid-sentence is a running page header
+            if line_mode and len(lines) == 1 and _is_heading_line(lines[0], standalone=True, line_mode=True):
+                before = previous_text_line(raw_idx)
+                if before and not _SENTENCE_END.search(before) and not _is_heading_line(
+                    before, standalone=True, line_mode=True
+                ):
+                    continue
+            # A numbered line in title case ("1. Courage", "2. Related Work") is
+            # a list item or numbered section with its text, not a bare heading;
+            # an all-caps one ("237. SEVEN APOPHTHEGMS FOR WOMEN") is a heading
+            numbered = _ARABIC_SECTION.match(lines[0])
+            numbered_text = bool(numbered) and not lines[0][numbered.end():].isupper()
+            if len(lines) == 1 and not numbered_text and _is_heading_line(
                 lines[0], standalone=True, line_mode=line_mode, next_line=following
             ):
-                if line_mode:
-                    # In wrapped text a heading follows a finished sentence; one
-                    # in mid-sentence is a running page header, so it is dropped
-                    before = previous_text_line(raw_idx)
-                    if before and not _SENTENCE_END.search(before) and not _is_heading_line(
-                        before, standalone=True, line_mode=True
-                    ):
-                        continue
                 heading, section, in_chapter_mode = _heading_label(lines[0]), None, False
                 text_since_heading = False
                 # "237. SEVEN APOPHTHEGMS FOR WOMEN" is both a heading and a section
@@ -251,11 +259,24 @@ class DocumentProcessor:
                 continue
 
             # Leading heading lines inside a paragraph ("THE FIRST BOOK\nI. Of my...")
+            popped_heading = False
             while len(lines) > 1 and _is_heading_line(
                 lines[0], standalone=False, line_mode=line_mode, next_line=lines[1]
             ):
                 heading, section, in_chapter_mode = _heading_label(lines.pop(0)), None, False
                 text_since_heading = False
+                popped_heading = True
+            # The rest of a heading-only paragraph is its title
+            # ("CHAPTER I.\nThe Period" -> "Chapter I: The Period")
+            if (
+                popped_heading
+                and len(lines) == 1
+                and not _ARABIC_SECTION.match(lines[0])
+                and not _ROMAN_SECTION.match(lines[0])
+                and _is_heading_line(lines[0], standalone=True, line_mode=line_mode)
+            ):
+                heading = f"{heading}: {_heading_label(lines[0])}"
+                continue
 
             starts_section = pending_section_start
             pending_section_start = False
@@ -288,6 +309,9 @@ class DocumentProcessor:
             if m and m.group(1) == "I" and not has_roman_two:
                 m = None
             m = m or _ARABIC_SECTION.match(body)
+            if m and len(lines) > 1 and _ARABIC_SECTION.match(lines[1]):
+                # "1. Gather...\n2. Weigh..." in one paragraph is a list
+                m = None
             if m and line_mode and raw_idx > 0:
                 # In wrapped text a line can start with a number mid-sentence
                 # ("...until the year\n476. After that..."); a section starts
@@ -395,9 +419,13 @@ class DocumentProcessor:
             # boundaries into passages of about MAX_PASSAGE_WORDS words
             chunk_words = 0
             # Any passage beyond MAX_UNSPLIT_PASSAGE_WORDS is split the same way
+            passage_chars = sum(len(part) for part in passage["parts"])
             split_long = (
-                passage["wrapped"] and passage["words"] > WRAPPED_SPLIT_WORDS
-            ) or passage["words"] > MAX_UNSPLIT_PASSAGE_WORDS
+                (passage["wrapped"] and passage["words"] > WRAPPED_SPLIT_WORDS)
+                or passage["words"] > MAX_UNSPLIT_PASSAGE_WORDS
+                or passage_chars > MAX_UNSPLIT_PASSAGE_CHARS
+            )
+            chunk_chars = 0
             added = False
             # In line mode the parts are wrapped lines of the same text, so
             # sentences may continue across them
@@ -412,15 +440,19 @@ class DocumentProcessor:
                     if (
                         split_long
                         and added
-                        and chunk_words + sentence_words > MAX_PASSAGE_WORDS
+                        and (
+                            chunk_words + sentence_words > MAX_PASSAGE_WORDS
+                            or chunk_chars + len(sentence) > MAX_SENTENCE_CHARS
+                        )
                     ):
                         if passage["label"]:
                             paragraph_labels[current_para_idx] = passage["label"]
                         current_para_idx += 1
-                        chunk_words = 0
+                        chunk_words = chunk_chars = 0
                     sentences.append(carry + sentence)
                     paragraph_indices.append(current_para_idx)
                     chunk_words += sentence_words
+                    chunk_chars += len(sentence) + 1
                     carry = ""
                     added = True
                 if carry.strip():
@@ -453,6 +485,13 @@ MAX_UNSPLIT_PASSAGE_WORDS = 3000
 # A "sentence" longer than this (text with no full stops) is cut into pieces
 # so it can still be embedded; the library's longest sentence is ~440 words
 MAX_SENTENCE_WORDS = 1000
+# ... and so is one longer than this many characters (text without spaces,
+# such as Chinese, or very long words); the library's longest is ~2,700. The
+# API accepts excerpts of up to 5,000 characters, and an excerpt is never
+# shorter than its sentence.
+MAX_SENTENCE_CHARS = 5000
+# A passage longer than this many characters is split like a long one
+MAX_UNSPLIT_PASSAGE_CHARS = 20000
 # Unnumbered paragraphs shorter than this are joined to the previous passage
 SHORT_FRAGMENT_WORDS = 20
 # Hard-wrapped prose blocks longer than this are split into ~MAX_PASSAGE_WORDS
@@ -593,6 +632,46 @@ def _is_heading_line(
     return title_case and (standalone or bool(_HEADING_KEYWORD.match(line)))
 
 
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _docx_text(p_element) -> str:
+    """A DOCX paragraph's text, including tracked insertions and fields
+    (which python-docx's paragraph.text can skip), excluding deletions."""
+    parts = []
+    for node in p_element.iter():
+        tag = node.tag
+        if tag == _W + "t" and node.text:
+            parts.append(node.text)
+        elif tag == _W + "tab":
+            parts.append("\t")
+        elif tag in (_W + "br", _W + "cr"):
+            parts.append("\n")
+    return "".join(parts).strip()
+
+
+def _decode_text(data: bytes) -> str:
+    """
+    Decode an uploaded text file: UTF-16 when it has a UTF-16 byte-order mark
+    (Windows "Unicode"), else UTF-8 (a BOM is removed). A UTF-8 file with a
+    few stray bytes keeps its UTF-8 text; otherwise the file is taken as
+    Windows "ANSI" (cp1252), with latin-1 as the last resort.
+    """
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    lenient = data.decode("utf-8-sig", errors="replace")
+    if lenient.count("\ufffd") <= max(1, len(lenient) // 1000):
+        return lenient.replace("\ufffd", "")
+    try:
+        return data.decode("cp1252")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
+
+
 def _is_footnote_run(raw_paragraphs: List[str], start: int) -> bool:
     """
     True when the paragraph at `start` ("1 From the point of view...") opens a
@@ -625,30 +704,51 @@ def _is_footnote_run(raw_paragraphs: List[str], start: int) -> bool:
 
 
 def _sentences(text: str) -> List[str]:
-    """nltk's sentences, with any longer than MAX_SENTENCE_WORDS cut into pieces."""
+    """
+    nltk's sentences, with any longer than MAX_SENTENCE_WORDS words or
+    MAX_SENTENCE_CHARS characters cut into pieces (at spaces where possible).
+    """
     out: List[str] = []
     for sentence in nltk.sent_tokenize(text):
         sentence = sentence.strip()
         if not sentence:
             continue
-        words = sentence.split()
-        if len(words) <= MAX_SENTENCE_WORDS:
+        if len(sentence.split()) <= MAX_SENTENCE_WORDS and len(sentence) <= MAX_SENTENCE_CHARS:
             out.append(sentence)
-        else:
-            out.extend(
-                " ".join(words[i : i + MAX_SENTENCE_WORDS])
-                for i in range(0, len(words), MAX_SENTENCE_WORDS)
-            )
+            continue
+        piece: List[str] = []
+        piece_chars = 0
+        for word in sentence.split():
+            # A single "word" longer than the limit (no spaces) is sliced
+            while len(word) > MAX_SENTENCE_CHARS:
+                if piece:
+                    out.append(" ".join(piece))
+                    piece, piece_chars = [], 0
+                out.append(word[:MAX_SENTENCE_CHARS])
+                word = word[MAX_SENTENCE_CHARS:]
+            if piece and (
+                len(piece) >= MAX_SENTENCE_WORDS
+                or piece_chars + 1 + len(word) > MAX_SENTENCE_CHARS
+            ):
+                out.append(" ".join(piece))
+                piece, piece_chars = [], 0
+            piece.append(word)
+            piece_chars += len(word) + (1 if piece_chars else 0)
+        if piece:
+            out.append(" ".join(piece))
     return out
 
 
 def _is_wrapped_prose(lines: List[str]) -> bool:
     """
     True for a block of hard-wrapped prose: many lines of similar, moderate
-    length (PDF/DOCX extraction). Books in this repo use one line per
+    length (PDF extraction). Books in this repo use one line per
     paragraph, and verse has short lines, so neither qualifies.
     """
     if len(lines) < 5:
+        return False
+    # Table rows ("Virtue | Vice") keep their line breaks
+    if sum(" | " in line for line in lines) * 2 >= len(lines):
         return False
     lengths = sorted(len(line) for line in lines)
     median = lengths[len(lengths) // 2]

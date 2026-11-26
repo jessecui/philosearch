@@ -234,7 +234,7 @@ def index_texts_directory(
     print(f"{'='*70}")
     print(f"\n📊 Processing Statistics:")
     print(f"  Files indexed:        {files_processed}/{len(text_files)}")
-    print(f"  Files skipped (empty): {files_skipped}")
+    print(f"  Files skipped (no text): {files_skipped}")
     print(f"  Total sentences:      {total_sentences:,}")
     print(f"  Total paragraphs:     {total_paragraphs:,}")
     print(

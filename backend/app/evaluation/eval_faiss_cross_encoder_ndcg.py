@@ -607,14 +607,15 @@ def main():
     print()
 
     def rel(new, old):
-        return (new - old) / old * 100 if old > 0 else 0.0
+        # Relative change; undefined when the baseline is 0
+        return f"{(new - old) / old * 100:+.1f}% relative" if old > 0 else "n/a (baseline is 0)"
 
     for base in ("flat", "parent_child"):
         b, f = results[base], results["parent_child_rerank"]
         print(f"Full system vs {METHODS[base]}:")
         print(f"  Accuracy@1: {f['accuracy'] - b['accuracy']:+.1f} pp")
-        print(f"  nDCG@10:    {rel(f['ndcg@10'], b['ndcg@10']):+.1f}% relative")
-        print(f"  MRR:        {rel(f['mrr'], b['mrr']):+.1f}% relative")
+        print(f"  nDCG@10:    {rel(f['ndcg@10'], b['ndcg@10'])}")
+        print(f"  MRR:        {rel(f['mrr'], b['mrr'])}")
     print("=" * 80 + "\n")
 
 
