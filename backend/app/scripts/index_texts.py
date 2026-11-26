@@ -8,6 +8,7 @@ over from the current index, so rebuilding the library doesn't remove them.
 """
 
 import atexit
+import json
 import os
 import re
 import shutil
@@ -21,6 +22,7 @@ backend_dir = Path(__file__).parent.parent.parent
 
 from app.utils.document_processor import DocumentProcessor
 from app.services.distributed_ingestion import DistributedIngestionPipeline
+from app.services.embedding_service import EmbeddingService
 from app.services.vector_store import VectorStore
 
 
@@ -30,37 +32,80 @@ SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
 _TEXTS_DOC_ID = re.compile(r"^doc_\d+_")
 
 
-def _carry_over_uploads(vector_store: VectorStore, data_path: Path) -> int:
+class UploadsUnreadable(RuntimeError):
+    """The current index's metadata can't be read, so uploads can't be kept."""
+
+
+def _carry_over_uploads(vector_store: VectorStore, data_path: Path, drop_uploads: bool = False) -> int:
     """
     Copy documents uploaded through the API from the live index into the new
-    one, with their vectors, labels and display text, so a rebuild of the
-    library doesn't delete them. Returns how many were kept.
+    one, with their labels and display text, so a rebuild of the library
+    doesn't delete them. Their vectors are copied when the live faiss.index
+    is readable and matches; otherwise (a missing or damaged index, the case
+    where startup says to rebuild) their sentences are embedded again.
+    metadata.json is the only copy of an upload's text, so if it can't be
+    read the rebuild stops (UploadsUnreadable) unless drop_uploads is set.
+    Returns how many were kept.
     """
-    if not ((data_path / "faiss.index").exists() and (data_path / "metadata.json").exists()):
+    metadata_path = data_path / "metadata.json"
+    if not metadata_path.exists():
         return 0
     try:
-        live = VectorStore(data_dir=str(data_path))
+        with open(metadata_path, encoding="utf-8") as f:
+            data = json.load(f)
+        documents = data["documents"]
+        sentences = data["sentences"]
     except Exception as e:
-        print(f"\n⚠️  Could not read the current index to keep uploaded documents: {e}")
+        if drop_uploads:
+            print(f"\n⚠️  Could not read {metadata_path}; uploaded documents are dropped: {e}")
+            return 0
+        raise UploadsUnreadable(
+            f"Could not read {metadata_path} to keep documents uploaded through the API ({e}). "
+            "The previous index was kept. Run again with --drop-uploads to rebuild without them."
+        ) from e
+
+    uploads = [d for d in documents.values() if not _TEXTS_DOC_ID.match(d["doc_id"]) and d["doc_id"] not in vector_store.documents]
+    if not uploads:
         return 0
-    kept = 0
-    for doc in live.list_documents():
-        if _TEXTS_DOC_ID.match(doc.doc_id) or doc.doc_id in vector_store.documents:
+
+    # Vectors from the live index when it loads cleanly (it checks that the
+    # index and metadata match); otherwise they are recomputed
+    live_index = None
+    try:
+        live_index = VectorStore(data_dir=str(data_path)).index
+    except Exception as e:
+        print(f"\n⚠️  The current faiss.index can't be used ({e}); re-embedding uploaded documents")
+    embedder = None
+
+    def split_key(key: str):
+        doc_id, _, para = key.rpartition("::")
+        return doc_id, int(para)
+
+    labels = [(split_key(k), v) for k, v in data.get("paragraph_labels", {}).items()]
+    texts = [(split_key(k), v) for k, v in data.get("paragraph_cache", {}).items()]
+    for doc in uploads:
+        positions = [i for i, s in enumerate(sentences) if s["doc_id"] == doc["doc_id"]]
+        if not positions:
             continue
-        positions = [i for i, s in enumerate(live.sentences) if s.doc_id == doc.doc_id]
+        doc_sentences = [sentences[i]["sentence_text"] for i in positions]
+        if live_index is not None:
+            embeddings = [live_index.reconstruct(i).tolist() for i in positions]
+        else:
+            if embedder is None:
+                embedder = EmbeddingService()
+            embeddings = embedder.embed_texts(doc_sentences)
         vector_store.index_document(
-            doc_id=doc.doc_id,
-            filename=doc.filename,
-            file_type=doc.file_type,
-            sentences=[live.sentences[i].sentence_text for i in positions],
-            paragraph_indices=[live.sentences[i].paragraph_idx for i in positions],
-            embeddings=[live.index.reconstruct(i).tolist() for i in positions],
-            author=doc.author,
-            paragraph_labels={p: v for (d, p), v in live.paragraph_labels.items() if d == doc.doc_id},
-            paragraph_texts={p: v for (d, p), v in live.paragraph_cache.items() if d == doc.doc_id},
+            doc_id=doc["doc_id"],
+            filename=doc["filename"],
+            file_type=doc["file_type"],
+            sentences=doc_sentences,
+            paragraph_indices=[sentences[i]["paragraph_idx"] for i in positions],
+            embeddings=embeddings,
+            author=doc.get("author"),
+            paragraph_labels={p: v for (d, p), v in labels if d == doc["doc_id"]},
+            paragraph_texts={p: v for (d, p), v in texts if d == doc["doc_id"]},
         )
-        kept += 1
-    return kept
+    return len(uploads)
 
 
 def parse_filename(filename: str) -> tuple[str, str | None]:
@@ -92,6 +137,7 @@ def index_texts_directory(
     data_dir: str = "data",
     num_workers: int = 8,
     batch_size: int = 32,
+    drop_uploads: bool = False,
 ):
     """
     Index all text files from the texts directory using distributed processing.
@@ -139,7 +185,12 @@ def index_texts_directory(
 
     # Find all documents (sorted, so document IDs are stable between runs)
     text_files = sorted(
-        f for f in texts_path.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
+        f
+        for f in texts_path.iterdir()
+        if f.is_file()
+        and f.suffix.lower() in SUPPORTED_EXTENSIONS
+        # Word's lock files ("~$Notes.docx") and hidden files aren't documents
+        and not f.name.startswith(("~$", "."))
     )
 
     if not text_files:
@@ -249,10 +300,15 @@ def index_texts_directory(
     # Swap the new index in only if every non-empty file was indexed.
     # A running server keeps its old index in memory: restart it afterwards.
     installed = files_processed > 0 and files_processed + files_skipped == len(text_files)
+    uploads_blocked = None
     if installed:
-        kept = _carry_over_uploads(vector_store, data_path)
-        if kept:
-            print(f"\n📎 Kept {kept} document(s) uploaded through the API")
+        try:
+            kept = _carry_over_uploads(vector_store, data_path, drop_uploads)
+            if kept:
+                print(f"\n📎 Kept {kept} document(s) uploaded through the API")
+        except UploadsUnreadable as e:
+            installed, uploads_blocked = False, str(e)
+    if installed:
         # Move the old metadata out first: if the run dies between the renames,
         # startup finds no metadata.json and fails loudly instead of pairing the
         # new vectors with the old corpus's metadata
@@ -269,7 +325,9 @@ def index_texts_directory(
         shutil.rmtree(staging_path, ignore_errors=True)
         failed = len(text_files) - files_processed - files_skipped
         reason = (
-            f"{failed} file(s) failed"
+            uploads_blocked
+            if uploads_blocked
+            else f"{failed} file(s) failed"
             if failed
             else f"no file had text to index ({files_skipped} skipped)"
         )
@@ -354,6 +412,11 @@ if __name__ == "__main__":
         help="Number of Ray workers for parallel embedding (default: 8)",
     )
     parser.add_argument(
+        "--drop-uploads",
+        action="store_true",
+        help="Rebuild even if documents uploaded through the API can't be read from the current index",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=32,
@@ -362,4 +425,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    index_texts_directory(args.texts_dir, args.data_dir, args.workers, args.batch_size)
+    index_texts_directory(args.texts_dir, args.data_dir, args.workers, args.batch_size, args.drop_uploads)

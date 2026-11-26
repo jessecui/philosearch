@@ -270,8 +270,9 @@ class DocumentProcessor:
                 heading, section, in_chapter_mode = _heading_label(popped), None, False
                 text_since_heading = False
                 popped_heading = True
+                bare = _MARKDOWN_HEADING.sub("", popped)
                 popped_structural = bool(
-                    _STRUCTURAL_HEADING.match(_MARKDOWN_HEADING.sub("", popped))
+                    _STRUCTURAL_HEADING.match(bare) or _NUMBERED_DIVISION.match(bare)
                 )
             # The rest of a heading-only paragraph joins the label when it is a
             # markdown heading itself ("# On Virtue\n## Introduction"), or the
@@ -552,6 +553,12 @@ _STRUCTURAL_HEADING = re.compile(
     re.IGNORECASE,
 )
 _MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+(?=\S)")
+# A division named by a keyword and one number, in any form: "CHAPTER ONE",
+# "Part Two", "LECTURE 3", "Week 3"
+_NUMBERED_DIVISION = re.compile(
+    r"^(?:chapter|book|part|section|lecture|unit|week|letter)\s+(?:\d+|[ivxlc]+|[a-z]+)\.?$",
+    re.IGNORECASE,
+)
 _HEADING_KEYWORD = re.compile(
     r"^(section|chapter|book|part|appendix|preface|introduction)\b", re.IGNORECASE
 )
