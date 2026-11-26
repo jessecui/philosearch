@@ -61,7 +61,8 @@ export function parseAnswer(text: string): AnswerBlock[] {
       const parent = last.items[last.items.length - 1];
       const lastPart = parent.parts[parent.parts.length - 1];
       const content = ordered ? ordered[2] : bullet![1];
-      if (lastPart?.kind === "sub") lastPart.items.push(content);
+      // A switch between bullets and numbers starts a new sub-list
+      if (lastPart?.kind === "sub" && lastPart.ordered === Boolean(ordered)) lastPart.items.push(content);
       else parent.parts.push({ kind: "sub", ordered: Boolean(ordered), items: [content] });
       continue;
     }

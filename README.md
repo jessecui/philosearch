@@ -340,6 +340,7 @@ philosearch/
 │   │       ├── api.ts                  # API base URL and error helper
 │   │       ├── theme.ts                # Light/dark theme (system setting + toggle)
 │   │       └── utils.ts                # Utility functions
+│   ├── index.html                      # Page shell (sets the theme before first paint)
 │   ├── public/favicon.svg              # Favicon
 │   ├── vite.config.ts                  # Dev proxy: /api -> localhost:8000
 │   └── package.json
@@ -361,12 +362,18 @@ philosearch/
 │   │   └── evaluation/
 │   │       ├── eval_faiss_cross_encoder_ndcg.py
 │   │       ├── eval_ray_ingestion_latency.py
-│   │       └── eval_embedding_at_scale.py
+│   │       ├── eval_embedding_at_scale.py
+│   │       ├── eval_philosophy_document.txt # Evaluation corpus (100 passages)
+│   │       └── test_outputs/           # Saved results quoted in this README
 │   ├── data/                           # FAISS index & metadata
 │   ├── texts/                          # Source texts (local, not committed)
 │   ├── .env.example
 │   └── requirements.txt
+├── docs/                               # README screenshots
 ├── Dockerfile
+├── .dockerignore
+├── .env.example                        # Environment settings template (for Docker)
+├── LICENSE
 └── README.md
 ```
 
@@ -389,7 +396,7 @@ The library in `backend/texts/` (filenames are `Title__Author_Name.txt`):
 
 The texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition with front matter and endnotes removed. To add a book, save it as plain text with blank lines between paragraphs, run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`.
 
-**Deploying:** an image built from a clean checkout has no texts or index, so the library starts empty. Supply the texts at build time and run `python -m app.scripts.index_texts` before starting the server.
+**Deploying:** the Dockerfile copies `backend/` as it is and starts the server; it doesn't build an index. An image built from a clean checkout therefore has no texts or index, and the library starts empty. Run `python -m app.scripts.index_texts` locally first, so `backend/data/` is copied into the image, or mount a volume at `/app/backend/data` that holds a built index. An index built inside a running container without a volume is lost when the container is recreated.
 
 Behind a reverse proxy, set the `FORWARDED_ALLOW_IPS` environment variable (read by uvicorn) to the proxy's address. Otherwise every visitor appears to come from the proxy, and the limit on wrong creator-name answers (10 per 15 minutes per address) is shared by everyone.
 

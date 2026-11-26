@@ -324,9 +324,10 @@ export default function App() {
       }
       if (block.kind === "heading") {
         return (
-          <p key={i} className={cn(spacing, "font-semibold text-gray-900 dark:text-zinc-100")}>
+          // h3: the answer section's own heading is an h2
+          <h3 key={i} className={cn(spacing, "font-semibold text-gray-900 dark:text-zinc-100")}>
             {formatInlineText(block.text)}
-          </p>
+          </h3>
         );
       }
       if (block.kind === "quote") {
@@ -357,9 +358,10 @@ export default function App() {
         // Bold may contain *italic*, even at its end ("**In *Meditations***",
         // closed by the optional third star). Each star inside bold can match
         // only one way, so an unclosed "**" can't trigger exponential
-        // backtracking that would freeze the page.
+        // backtracking that would freeze the page. Italic needs a non-space
+        // just inside each star, so "2 * 3 = 6 and 4 * 5" stays plain.
         const regex =
-          /(\*\*(?=\S)(?:[^*\n]|\*(?!\*))+?\*\*\*?|\*[^*\n]+\*|\[\d+\])/g;
+          /(\*\*(?=\S)(?:[^*\n]|\*(?!\*))+?\*\*\*?|\*(?=[^\s*])[^*\n]*?[^\s*]\*|\[\d+\])/g;
         let match;
 
         while ((match = regex.exec(segment)) !== null) {
@@ -554,18 +556,21 @@ export default function App() {
         {/* Top bar */}
         <header className="bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="flex items-center gap-2 cursor-pointer"
-            >
-              <LogoMark />
-              <span className="text-[17px] font-semibold text-gray-900 dark:text-zinc-100 tracking-tight">
-                PhiloSearch
-              </span>
-              {/* Spoken name: the visible text plus what the button does */}
-              <span className="sr-only">, start a new search</span>
-            </button>
+            {/* The page's top-level heading; the name doubles as a reset button */}
+            <h1>
+              <button
+                type="button"
+                onClick={handleReset}
+                className="flex items-center gap-2 cursor-pointer"
+              >
+                <LogoMark />
+                <span className="text-[17px] font-semibold text-gray-900 dark:text-zinc-100 tracking-tight">
+                  PhiloSearch
+                </span>
+                {/* Spoken name: the visible text plus what the button does */}
+                <span className="sr-only">, start a new search</span>
+              </button>
+            </h1>
             <span className="hidden sm:block h-5 w-px bg-gray-200 dark:bg-zinc-800" aria-hidden="true" />
             <p className="hidden sm:block text-sm text-gray-500 dark:text-zinc-400 truncate">
               Semantic search and cited answers across classic philosophical texts
