@@ -14,7 +14,7 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 - 🎯 **2-Stage Retrieval**: Parent-child FAISS + cross-encoder reranking (nDCG@10 +27.7% over flat search, 88% vs 50% accuracy@1)
 - 🤖 **RAG Generation**: Gemini 3.8 Flash streaming answers with source citations
 - 📄 **Multi-format Support**: PDF, TXT, MD, DOCX
-- ⚡ **Ray Distributed Processing**: 3.74x faster embedding than single-threaded CPU (10 workers)
+- ⚡ **Ray Distributed Processing**: 3.80x faster embedding than single-threaded CPU (10 workers)
 - 📌 **Structured Citations**: Short 1–3 sentence excerpts labelled by book and section (e.g. "Meditations, Book 6, §49")
 - 🚀 **Automatic Device Detection**: MPS/CUDA/CPU
 - 🌓 **Light and Dark Themes**: Follows the system setting, with a toggle in the header
@@ -285,13 +285,13 @@ Embedding 19,900 sentences with all-MiniLM-L6-v2 on a 12-core Mac (CPU unless no
 
 | Method | Time | Throughput | vs single-threaded |
 |--------|------|------------|--------------------|
-| **Single-threaded CPU** (benchmark baseline) | 29.77s | 669 sent/s | 1.0x |
-| **Multithreaded CPU** (PyTorch default, no Ray) | 11.55s | 1,723 sent/s | 2.6x |
-| **Ray, 10 CPU workers** (excluding 6.6s worker startup) | 7.95s | 2,503 sent/s | **3.74x** (−73.3% latency) |
-| **Ray, 10 CPU workers** (including startup) | 14.57s | 1,366 sent/s | 2.04x (−51.1% latency) |
-| **Apple GPU (MPS), no Ray** | 5.80s | 3,431 sent/s | 5.1x |
+| **Single-threaded CPU** (benchmark baseline) | 28.26s | 704 sent/s | 1.0x |
+| **Multithreaded CPU** (PyTorch default, no Ray) | 11.55s | 1,723 sent/s | 2.4x |
+| **Ray, 10 CPU workers** (excluding 6.5s worker startup) | 7.43s | 2,679 sent/s | **3.80x** (−73.7% latency) |
+| **Ray, 10 CPU workers** (including startup) | 13.94s | 1,428 sent/s | 2.03x (−50.7% latency) |
+| **Apple GPU (MPS), no Ray** | 5.80s | 3,431 sent/s | 4.9x |
 
-The Ray rows are the median of three runs (latency reduction 72.8%, 73.3%, 74.3%); results vary by about ±1 point between runs. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
+The Ray rows are the median of three runs (latency reduction 73.6%, 73.7%, 73.8%); results vary by about ±1 point between runs. The single-threaded baseline is warmed up before timing, like the Ray workers. Ray pays off for large CPU-only batches once its workers are running; on a machine with a GPU, a single GPU process is faster. The multithreaded CPU and MPS rows were measured separately on the same input; `eval_ray_ingestion_latency` reports the single-threaded and Ray rows.
 
 The table above counts Ray's startup separately. Counting startup for every method, and comparing against PyTorch's own multithreading, shows how large a job has to be before Ray pays off (`eval_embedding_at_scale`, sentences from the library repeated to each size). Both sides use the same 8 cores: PyTorch's default runs 8 threads (one per performance core on the M4 Pro), and each of Ray's 8 workers runs a single thread.
 

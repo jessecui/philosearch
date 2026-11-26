@@ -72,6 +72,8 @@ def benchmark_ingestion(text: str, batch_size: int = 32) -> Dict[str, Any]:
     print("Clearing FAISS data...")
     vector_store_seq = VectorStore(data_dir=scratch_data_dir())
 
+    # Warm the model first, as the Ray workers are warmed before their timing
+    embedding_service.embed_texts(["warm up"])
     seq_start = time.time()
     seq_embeddings = embedding_service.embed_texts(sentences)
     seq_embed_time = time.time() - seq_start
