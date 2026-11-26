@@ -6,6 +6,7 @@ based on document excerpts retrieved from the RAG pipeline.
 """
 
 import os
+import re
 import time
 import asyncio
 from typing import List, AsyncGenerator, Dict, Any, Tuple
@@ -91,7 +92,7 @@ class GeminiGenerator:
 
         for i, result in enumerate(search_results, 1):
             # Parse title from filename (remove extension and double-underscore author suffix)
-            title = result.filename.replace(".txt", "").split("__")[0].replace("_", " ")
+            title = re.sub(r"\.[^.]+$", "", result.filename).split("__")[0].replace("_", " ")
 
             # Build source line with author and section if available
             source_line = f'\n[{i}] "{title}"'

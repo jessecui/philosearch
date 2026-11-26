@@ -64,7 +64,7 @@ def run_method(method: str, n: int) -> dict:
         from app.services.distributed_ingestion import DistributedIngestionPipeline
 
         start = time.perf_counter()
-        pipeline = DistributedIngestionPipeline(num_workers=8, batch_size=128)
+        pipeline = DistributedIngestionPipeline(num_workers=8, batch_size=32)
         startup = time.perf_counter() - start
         start = time.perf_counter()
         pipeline.embed_sentences_distributed(sentences)

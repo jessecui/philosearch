@@ -307,10 +307,13 @@ class VectorStore:
         Persist the index and metadata together. Both are written to temp
         files first; only when both writes succeed are they renamed into
         place, back to back, so a failed write (e.g. disk full) leaves the
-        previous pair untouched.
+        previous pair untouched. If the metadata rename fails after the index
+        rename, the previous index is put back, so the pair on disk always
+        matches.
         """
         index_tmp = f"{self.index_path}.tmp"
         metadata_tmp = f"{self.metadata_path}.tmp"
+        index_backup = f"{self.index_path}.bak"
         try:
             faiss.write_index(self.index, index_tmp)
             self._write_metadata(metadata_tmp)
@@ -319,8 +322,24 @@ class VectorStore:
                 if os.path.exists(tmp):
                     os.remove(tmp)
             raise
-        os.replace(index_tmp, self.index_path)
-        os.replace(metadata_tmp, self.metadata_path)
+        # A second name for the previous index, which stays in place
+        had_index = os.path.exists(self.index_path)
+        if had_index:
+            if os.path.exists(index_backup):
+                os.remove(index_backup)
+            os.link(self.index_path, index_backup)
+        try:
+            os.replace(index_tmp, self.index_path)
+            try:
+                os.replace(metadata_tmp, self.metadata_path)
+            except Exception:
+                if had_index:
+                    os.replace(index_backup, self.index_path)
+                raise
+        finally:
+            for leftover in (index_tmp, metadata_tmp, index_backup):
+                if os.path.exists(leftover):
+                    os.remove(leftover)
 
     @_locked
     @_transactional

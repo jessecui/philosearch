@@ -198,7 +198,7 @@ if __name__ == "__main__":
     import sys
 
     # Parse command line arguments
-    batch_size = 128  # Default batch size
+    batch_size = 32  # Default batch size (the model's default)
     multiplier = 100  # Default multiplier
 
     if len(sys.argv) > 1:

@@ -322,7 +322,6 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=50)
-    deduplicate_paragraphs: bool = True
     use_reranking: bool = False  # Enable 2-stage retrieval with cross-encoder reranking
     top_k_faiss: int = Field(default=50, ge=1, le=200)  # FAISS candidates (stage 1)
     context_window: int = Field(default=2, ge=0, le=5)  # Paragraphs before/after
@@ -387,6 +386,22 @@ class ValidateCreatorRequest(BaseModel):
     answer: str = Field(max_length=200)
 
 
+# The creator's name works as a password, and names are easy to guess, so
+# wrong answers are limited per client address
+MAX_FAILED_ANSWERS = 10
+FAILED_ANSWER_WINDOW_SECONDS = 15 * 60
+_failed_answers: dict[str, list[float]] = {}
+
+
+def _recent_failures(client: str, now: float) -> list[float]:
+    recent = [t for t in _failed_answers.get(client, []) if now - t < FAILED_ANSWER_WINDOW_SECONDS]
+    if recent:
+        _failed_answers[client] = recent
+    else:
+        _failed_answers.pop(client, None)
+    return recent
+
+
 @app.post("/validate-creator")
 async def validate_creator(
     request: ValidateCreatorRequest, http_request: Request, response: Response
@@ -399,7 +414,8 @@ async def validate_creator(
         answer: The user's answer to the creator question
 
     Returns:
-        {"valid": true/false}
+        {"valid": true/false}; 429 after MAX_FAILED_ANSWERS wrong answers from
+        one address within FAILED_ANSWER_WINDOW_SECONDS
     """
     creator_name = os.getenv("CREATOR_NAME", "").strip().replace(" ", "").lower()
     user_answer = request.answer.strip().replace(" ", "").lower()
@@ -409,7 +425,16 @@ async def validate_creator(
             status_code=500, detail="CREATOR_NAME environment variable not configured"
         )
 
+    client = http_request.client.host if http_request.client else "unknown"
+    now = time.time()
+    if len(_recent_failures(client, now)) >= MAX_FAILED_ANSWERS:
+        raise HTTPException(
+            status_code=429, detail="Too many attempts. Please try again later."
+        )
+
     valid = hmac.compare_digest(user_answer.encode(), creator_name.encode())
+    if not valid:
+        _failed_answers.setdefault(client, []).append(now)
     if valid:
         forwarded_proto = http_request.headers.get("x-forwarded-proto", "")
         response.set_cookie(
@@ -693,13 +718,14 @@ async def search_documents(request: SearchRequest):
     Args:
         query: Search query text
         top_k: Number of final results to return (default: 5)
-        deduplicate_paragraphs: Return only one result per paragraph (default: True)
         use_reranking: Enable 2-stage retrieval with cross-encoder reranking (default: False)
         top_k_faiss: Number of candidates from FAISS stage (default: 50, only used if use_reranking=True)
-        context_window: Number of paragraphs before/after for context expansion (default: 2)
+        context_window: Number of paragraphs before/after for context expansion
+            (default: 2, only used if use_reranking=True)
 
     Returns:
-        List of search results with matched sentences and paragraph context
+        List of search results, one per passage, with matched sentences and
+        paragraph context
         If use_reranking=True, also includes reranking_score and timing breakdown
     """
     _require_known_doc_ids(request.doc_ids)
