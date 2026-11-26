@@ -438,9 +438,3 @@ Behind a hosting platform's proxy, set `CLIENT_IP_HEADER` to the header the plat
 
 **Upload or delete returns 403**
 - Set `ADMIN_TOKEN` in `backend/.env` and send it as the `X-Admin-Token` header
-
----
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
