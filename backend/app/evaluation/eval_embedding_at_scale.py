@@ -99,8 +99,9 @@ def main(sizes: list[int]) -> None:
         for method in ("default", "single"):
             other = rows[method]["total_s"]
             change = (1 - ray / other) * 100
-            verdict = f"{change:.1f}% faster" if change >= 0 else f"{-change:.1f}% slower"
-            print(f"  Ray vs {LABELS[method].split(' (')[0]}: {verdict} ({other / ray:.2f}x)")
+            # A cut in time, not a gain in speed: 33.9% less time is 1.51x as fast
+            verdict = f"{change:.1f}% less time" if change >= 0 else f"{-change:.1f}% more time"
+            print(f"  Ray vs {LABELS[method].split(' (')[0]}: {verdict} ({other / ray:.2f}x as fast)")
         print()
 
 

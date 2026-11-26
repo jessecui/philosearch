@@ -233,7 +233,8 @@ def index_texts_directory(
     print("✅ INDEXING COMPLETE!" if installed else "❌ INDEXING FAILED: the previous index was kept")
     print(f"{'='*70}")
     print(f"\n📊 Processing Statistics:")
-    print(f"  Files processed:      {files_processed}/{len(text_files)}")
+    print(f"  Files indexed:        {files_processed}/{len(text_files)}")
+    print(f"  Files skipped (empty): {files_skipped}")
     print(f"  Total sentences:      {total_sentences:,}")
     print(f"  Total paragraphs:     {total_paragraphs:,}")
     print(
