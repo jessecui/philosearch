@@ -14,7 +14,7 @@ A semantic search and RAG (Retrieval-Augmented Generation) platform for philosop
 - 🎯 **2-Stage Retrieval**: Parent-child FAISS + cross-encoder reranking (nDCG@10 +27.7% over flat search, 88% vs 50% accuracy@1)
 - 🤖 **RAG Generation**: Gemini 3.8 Flash streaming answers with source citations
 - 📄 **Multi-format Support**: PDF, TXT, MD, DOCX
-- ⚡ **Ray Distributed Processing**: 3.80x faster embedding and indexing than single-threaded CPU (10 workers)
+- ⚡ **Ray Distributed Processing**: 3.80x faster embedding and indexing than single-threaded CPU (10 workers, excluding their ~6.5s startup)
 - 📌 **Structured Citations**: Short 1–3 sentence excerpts labelled by book and section (e.g. "Meditations, Book 6, §49")
 - 🚀 **Automatic Device Detection**: MPS/CUDA/CPU
 - 🌓 **Light and Dark Themes**: Follows the system setting, with a toggle in the header
@@ -300,7 +300,7 @@ The table above counts Ray's startup separately. Counting startup for every meth
 | 20,000 | 36.2s | 16.4s | 16.3s | 1.00x (−0.5% latency) | 2.23x (−55.1%) |
 | 300,000 | 491.5s | 223.5s | 147.8s | **1.51x (−33.9% latency)** | **3.32x (−69.9%)** |
 
-Ray's ~6s worker startup cancels its speed advantage around 20,000 sentences; by 300,000 it is under 4% of the run. Once running, Ray's workers embed about 55% more sentences per second than PyTorch's threads on the same cores at 300,000 sentences (about 38% at 20,000), because each worker processes its own batches instead of splitting every batch across threads. Earlier runs at 300,000 sentences gave 31.8%–35.0% against PyTorch's default, so expect a few points of variation. Adding workers beyond 8 doesn't help: 10 workers ran no faster, since the extra two land on efficiency cores.
+Ray's ~6s worker startup cancels its speed advantage around 20,000 sentences; by 300,000 it is under 4% of the run. Once running, Ray's workers embed about 56% more sentences per second than PyTorch's threads on the same cores at 300,000 sentences (about 38% at 20,000), because each worker processes its own batches instead of splitting every batch across threads. Earlier runs at 300,000 sentences gave 31.8%–35.0% against PyTorch's default, so expect a few points of variation. Adding workers beyond 8 doesn't help: 10 workers ran no faster, since the extra two land on efficiency cores.
 
 `/index-distributed` also runs 8 workers. **Recommendation:** Use `/index-distributed` for CPU-only batches of tens of thousands of sentences or more. Below that, the regular indexing path, which uses PyTorch's multithreading or the GPU, is as fast or faster.
 

@@ -238,17 +238,20 @@ export default function App() {
 
   useEffect(() => () => streamController.current?.abort(), []);
 
-  // Clear highlight on click anywhere
+  // Clear highlight on the next click or key press anywhere
   useEffect(() => {
     if (highlightedSource === null) return;
 
     const clearHighlight = () => setHighlightedSource(null);
 
-    // Use capture phase to catch click before it bubbles
+    // Use capture phase to catch the event before it bubbles
     window.addEventListener("click", clearHighlight, { capture: true });
+    window.addEventListener("keydown", clearHighlight, { capture: true });
 
-    return () =>
+    return () => {
       window.removeEventListener("click", clearHighlight, { capture: true });
+      window.removeEventListener("keydown", clearHighlight, { capture: true });
+    };
   }, [highlightedSource]);
 
   const scrollToSource = useCallback(
@@ -265,6 +268,8 @@ export default function App() {
         if (element) {
           setHighlightedSource(sourceNum);
           element.scrollIntoView({ behavior: "smooth", block: "center" });
+          // Move keyboard and screen-reader position to the source too
+          element.focus({ preventScroll: true });
         }
       }, 100);
     },
@@ -775,6 +780,8 @@ export default function App() {
                         <li
                           key={idx}
                           id={`source-${idx + 1}`}
+                          // Focusable from code only, so citations can move focus here
+                          tabIndex={-1}
                           className={cn(
                             "px-5 py-4 transition-colors duration-300 scroll-mt-6",
                             highlightedSource === idx + 1 ? "bg-blue-50/60 dark:bg-blue-500/15" : "bg-white dark:bg-zinc-900",
