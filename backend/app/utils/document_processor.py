@@ -76,6 +76,8 @@ class DocumentProcessor:
                         paragraph = Paragraph(child, doc)
                         text = _docx_text(child)
                         if not text:
+                            for box in _docx_text_boxes(child):
+                                walk(box)
                             continue
                         style = (paragraph.style.name if paragraph.style is not None else "") or ""
                         if style == "Title" or style.startswith("Heading"):
@@ -83,6 +85,9 @@ class DocumentProcessor:
                         elif style.startswith("List"):
                             text = f"• {text}"
                         blocks.append(text)
+                        # Text boxes anchored in the paragraph, once each
+                        for box in _docx_text_boxes(child):
+                            walk(box)
                     elif tag == "tbl":
                         rows = []
                         for row in Table(child, doc).rows:
@@ -513,10 +518,12 @@ LEAD_IN_WORD = re.compile(
 )
 # Text that ends a sentence: "...done." / "...it?”"
 _SENTENCE_END = re.compile(r"[.!?…][\"”’')\]]*\s*$")
+# A bullet or numbered list item: "- Courage", "• Justice", "2. Weigh", "3) Decide"
+_LIST_ITEM = re.compile(r"^(?:[-*•+–]|\d{1,3}[.)])\s")
 # A word hyphenated across a line break: "philoso-\nphy"
 _LINE_END_HYPHEN = re.compile(r"(?<=[a-z])-\n(?=[a-z])")
 # An asterisk opening markdown emphasis: "*a* point", "**bold**"
-_EMPHASIS_OPENER = re.compile(r"(?:^|\s)\*+[^\s*]")
+_EMPHASIS_OPENER = re.compile(r"(?:^|[\s(\[\"“‘'])\*+[^\s*]")
 # An asterisk note marker: "those* who", "chriae * to learn", "honey’.*".
 # A single asterisk after a word or punctuation, so "2 * 3" and markdown
 # "**bold**" are left alone.
@@ -604,6 +611,9 @@ def _is_heading_line(
 
     if _ROMAN_SECTION.match(line) and not standalone:
         return False
+    # A table row ("VIRTUE | DEFICIENCY | EXCESS") is not a heading
+    if " | " in line or line.startswith("|"):
+        return False
     # A numbered list item without a period ("2 Eggs") is not a title
     if re.match(r"^\d+\s", line):
         return False
@@ -635,27 +645,67 @@ def _is_heading_line(
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
+_MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+# Subtrees whose text isn't part of the paragraph: deletions and the old
+# position of moved text (tracked changes), the fallback copy Word stores of
+# every drawing, and text boxes (extracted as paragraphs of their own)
+_DOCX_SKIP = {_W + "del", _W + "moveFrom", _MC + "Fallback", _W + "txbxContent"}
+
+
 def _docx_text(p_element) -> str:
     """A DOCX paragraph's text, including tracked insertions and fields
     (which python-docx's paragraph.text can skip), excluding deletions."""
-    parts = []
-    for node in p_element.iter():
-        tag = node.tag
-        if tag == _W + "t" and node.text:
-            parts.append(node.text)
-        elif tag == _W + "tab":
-            parts.append("\t")
-        elif tag in (_W + "br", _W + "cr"):
-            parts.append("\n")
+    parts: List[str] = []
+
+    def visit(node) -> None:
+        for child in node:
+            tag = child.tag
+            if tag in _DOCX_SKIP:
+                continue
+            if tag == _W + "t":
+                parts.append(child.text or "")
+            elif tag == _W + "tab":
+                parts.append("\t")
+            elif tag in (_W + "br", _W + "cr"):
+                parts.append("\n")
+            elif tag == _W + "noBreakHyphen":
+                parts.append("-")
+            elif tag == _W + "sym":
+                code = int(child.get(_W + "char", "0"), 16)
+                # Symbol-font characters are stored in the private-use area
+                if code >= 0xF000:
+                    code -= 0xF000
+                if code >= 0x20:
+                    parts.append(chr(code))
+            else:
+                visit(child)
+
+    visit(p_element)
     return "".join(parts).strip()
+
+
+def _docx_text_boxes(p_element) -> List:
+    """Text boxes in a paragraph, skipping the fallback copy Word also stores."""
+    boxes = []
+    for box in p_element.iter(_W + "txbxContent"):
+        parent, fallback = box.getparent(), False
+        while parent is not None and parent is not p_element:
+            if parent.tag == _MC + "Fallback":
+                fallback = True
+                break
+            parent = parent.getparent()
+        if not fallback:
+            boxes.append(box)
+    return boxes
 
 
 def _decode_text(data: bytes) -> str:
     """
     Decode an uploaded text file: UTF-16 when it has a UTF-16 byte-order mark
-    (Windows "Unicode"), else UTF-8 (a BOM is removed). A UTF-8 file with a
-    few stray bytes keeps its UTF-8 text; otherwise the file is taken as
-    Windows "ANSI" (cp1252), with latin-1 as the last resort.
+    (Windows "Unicode"), else UTF-8 (a BOM is removed). A file that is mostly
+    valid UTF-8 with a few stray bytes keeps its UTF-8 text (the stray bytes
+    are dropped); otherwise it is taken as Windows "ANSI" (cp1252), with
+    latin-1 as the last resort.
     """
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         return data.decode("utf-16")
@@ -663,8 +713,12 @@ def _decode_text(data: bytes) -> str:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
         pass
+    # UTF-8 with a few stray bytes still has valid UTF-8 characters, and more
+    # of them than bad bytes; a cp1252 file ("café" as a single byte) has none
     lenient = data.decode("utf-8-sig", errors="replace")
-    if lenient.count("\ufffd") <= max(1, len(lenient) // 1000):
+    bad = lenient.count("\ufffd")
+    valid_non_ascii = sum(1 for c in lenient if ord(c) > 0x7F) - bad
+    if valid_non_ascii > bad:
         return lenient.replace("\ufffd", "")
     try:
         return data.decode("cp1252")
@@ -747,8 +801,10 @@ def _is_wrapped_prose(lines: List[str]) -> bool:
     """
     if len(lines) < 5:
         return False
-    # Table rows ("Virtue | Vice") keep their line breaks
+    # Table rows ("Virtue | Vice") and list items keep their line breaks
     if sum(" | " in line for line in lines) * 2 >= len(lines):
+        return False
+    if sum(bool(_LIST_ITEM.match(line)) for line in lines) * 2 >= len(lines):
         return False
     lengths = sorted(len(line) for line in lines)
     median = lengths[len(lengths) // 2]
@@ -772,25 +828,48 @@ def _heading_label(line: str) -> str:
     # "AN ABSURD REASONING Absurdity and Suicide" -> part title in caps, then the
     # chapter title; the chapter title is the more specific label.
     # "FROM THE HEIGHTS By F. W. Nietzsche ..." -> caps title, then a byline.
+    # Words without lowercase letters ("SECTION 2", "APPENDIX A", "Q&A") all
+    # belong to the capitals.
     words = line.split()
     caps = 0
-    while caps < len(words) and words[caps].isupper() and len(words[caps]) > 1:
+    while caps < len(words) and not any(c.islower() for c in words[caps]):
         caps += 1
-    if 0 < caps < len(words) and not words[0].endswith(":"):
+    if 0 < caps < len(words) and not words[0].endswith(":") and any(
+        c.isalpha() for w in words[:caps] for c in w
+    ):
         rest = " ".join(words[caps:])
         line = " ".join(words[:caps]) if rest.lower().startswith("by ") else rest
 
-    if line.isupper() or line.split(":")[0].isupper():
+    if not any(c.islower() for c in line):
+        line = _title_case(line)
+    elif not any(c.islower() for c in line.split(":")[0]):
+        # "APPENDIX: Hope and the Absurd in ..." -> caps head, title-case tail
         head, sep, tail = line.partition(":")
         line = _title_case(head) + sep + tail
     return line if len(line) <= 80 else line[:77].rstrip() + "..."
 
 
+_ROMAN_NUMERAL = re.compile(r"^(?=[IVXLC])C{0,3}(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$")
+
+
 def _title_case(text: str) -> str:
-    words = text.lower().split()
-    return " ".join(
-        w if i and w in _SMALL_WORDS else w.capitalize() for i, w in enumerate(words)
-    )
+    """Title case for an all-caps heading. Roman numerals ("II.") and
+    abbreviations ("U.S.", "Q&A") stay in capitals, and a word after a
+    period or colon starts a new phrase ("III. A New Hope")."""
+    out: List[str] = []
+    phrase_start = True
+    words = text.split()
+    for i, word in enumerate(words):
+        core = word.strip(".,:;!?()[]\"'“”‘’")
+        if core and (_ROMAN_NUMERAL.match(core) or re.search(r"[A-Za-z][.&'][A-Za-z]", core)):
+            out.append(word)
+        # Small words stay lowercase, except first and last ("Appendix A")
+        elif not phrase_start and i < len(words) - 1 and word.lower() in _SMALL_WORDS:
+            out.append(word.lower())
+        else:
+            out.append(word[:1].upper() + word[1:].lower())
+        phrase_start = word.endswith((".", ":"))
+    return " ".join(out)
 
 
 def _roman_to_int(numeral: str) -> int:
