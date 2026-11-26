@@ -111,7 +111,11 @@ class GeminiGenerator:
             # only citable text; the full passage is background for interpretation
             excerpt = result.excerpt_text or result.paragraph_text
             context_parts.append(f"\n    Excerpt (citable): {excerpt}")
-            if result.paragraph_text and result.paragraph_text != excerpt:
+            # Compared ignoring whitespace: the passage keeps the book's line
+            # breaks while the excerpt's sentences are joined by spaces
+            if result.paragraph_text and "".join(result.paragraph_text.split()) != "".join(
+                excerpt.split()
+            ):
                 context_parts.append(
                     f"    Full passage (background only): {result.paragraph_text}"
                 )

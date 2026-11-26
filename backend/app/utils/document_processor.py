@@ -241,8 +241,13 @@ class DocumentProcessor:
             fits = prev is not None and prev["words"] + words <= MAX_PASSAGE_WORDS
             # A paragraph opening in lowercase finishes the sentence before it,
             # typically prose resuming after a quoted verse ("...long hence,"
-            # / "according to our Virgil, who..."), so it never stands alone
-            continues_sentence = body[:1].islower()
+            # / "according to our Virgil, who..."). It joins regardless of
+            # length only when the previous paragraph really stops mid-sentence,
+            # so a document written all in lowercase isn't merged into one passage.
+            continues_sentence = body[:1].islower() and (
+                fits
+                or (prev is not None and not _SENTENCE_END.search(prev["parts"][-1]))
+            )
             # A paragraph opening on a linking word ("Similarly, people who...",
             # "But it is not...") answers the paragraph before it, so it joins
             # that passage when the two fit together
@@ -345,7 +350,9 @@ WRAPPED_SPLIT_WORDS = 400
 
 # "XLIX. That which..." but not initials such as "C. S. Lewis" or "V. I. Lenin"
 _ROMAN_SECTION = re.compile(r"^([IVXLC]{1,7})\.\s(?![A-Z]\.)")
-_ARABIC_SECTION = re.compile(r"^(\d{1,4})([A-Z]?)\.\s")  # "63. He who...", "65A. We..."
+# "63. He who...", "65A. We..."; up to three digits, so a paragraph opening
+# on a year ("1984. Orwell's novel...") isn't read as section 1984
+_ARABIC_SECTION = re.compile(r"^(\d{1,3})([A-Z]?)\.\s")
 _BARE_NUMBER_SENTENCE = re.compile(r"^(\d{1,4}[A-Z]?|[IVXLC]{1,7})\.$")
 _CHAPTER_NUMBER_LINE = re.compile(r"^\d{1,3}$")  # "13" alone on a line
 _FOOTNOTE = re.compile(r"^(\d{1,2}) (?=[A-Z\"“'‘])")  # "5 Apropos of the notion..."
@@ -355,8 +362,12 @@ LEAD_IN_WORD = re.compile(
     r"|similarly|likewise|nevertheless|nonetheless|however|still|instead)\b",
     re.IGNORECASE,
 )
-# An asterisk note marker: "those* who", "chriae * to learn", "honey’.*"
-_NOTE_MARKER = re.compile(r"(?<=\S) ?\*+(?=\s|$)")
+# Text that ends a sentence: "...done." / "...it?”"
+_SENTENCE_END = re.compile(r"[.!?…][\"”’')\]]*\s*$")
+# An asterisk note marker: "those* who", "chriae * to learn", "honey’.*".
+# A single asterisk after a word or punctuation, so "2 * 3" and markdown
+# "**bold**" are left alone.
+_NOTE_MARKER = re.compile(r"(?<=[^\s\d*]) ?\*(?=\s|$)")
 _INLINE_FOOTNOTE = re.compile(r"\s*\[Footnote:[^\]]*\]")  # "[Footnote: Like the frog: staccato.]"
 # "THE SIXTH BOOK" / "HIS FIRST BOOK" as the whole line, or "CHAPTER IX",
 # "Part 2", "Chapter 3: The Return", optionally followed by a title in caps or
