@@ -1,6 +1,6 @@
 import Cookies from "js-cookie";
 import { AlertCircle, ChevronDown, Loader2, Moon, Search, Sun } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { AuthModal } from "@/components/auth-modal";
 import { BookCover } from "@/components/book-cover";
@@ -72,25 +72,60 @@ function trimExcerpt(excerpt: string): string {
   return `${head.slice(0, cut).trimEnd()} …`;
 }
 
-// The full passage with the cited excerpt marked, so expanding a source keeps
-// the cited lines in view. The excerpt's sentences are joined by spaces while
-// the passage may break them across lines (verse), so whitespace is matched
-// loosely. If the excerpt isn't found, the passage is shown unmarked.
-function PassageWithExcerpt({ passage, excerpt }: { passage: string; excerpt?: string | null }) {
-  const words = excerpt?.trim().split(/\s+/) ?? [];
-  if (!words.length) return <>{passage}</>;
+// Where the cited excerpt sits in its passage. The excerpt's sentences are
+// joined by spaces while the passage keeps the book's line breaks (verse), and
+// a sentence split before a closing quote ('else!' + '"—This') has no space
+// in the book, so whitespace between words is matched loosely or not at all.
+function findExcerpt(passage: string, excerpt?: string | null): RegExpExecArray | null {
+  const words = excerpt?.trim().split(/\s+/).filter(Boolean) ?? [];
+  if (!words.length) return null;
   const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const match = new RegExp(escaped.join("\\s+")).exec(passage);
-  if (!match) return <>{passage}</>;
-  const end = match.index + match[0].length;
+  return new RegExp(escaped.join("\\s*")).exec(passage);
+}
+
+// Passage text as paragraphs (or stanzas) with a small gap between them rather
+// than a full blank line; verse lines inside a paragraph keep their breaks.
+// With `excerpt`, the cited part is marked, so expanding a source keeps the
+// cited lines in view; if it isn't found, the text is shown unmarked.
+function PassageText({ text, excerpt }: { text: string; excerpt?: string | null }) {
+  const match = findExcerpt(text, excerpt);
+  const pieces = match
+    ? [
+        { text: text.slice(0, match.index), marked: false },
+        { text: match[0], marked: true },
+        { text: text.slice(match.index + match[0].length), marked: false },
+      ]
+    : [{ text, marked: false }];
+  // A marked excerpt may span a paragraph break, so split each piece and
+  // carry the pieces into the paragraphs they fall in
+  const paragraphs: { text: string; marked: boolean }[][] = [[]];
+  for (const piece of pieces) {
+    piece.text.split(/\n[ \t]*\n\s*/).forEach((part, i) => {
+      if (i > 0) paragraphs.push([]);
+      if (part) paragraphs[paragraphs.length - 1].push({ text: part, marked: piece.marked });
+    });
+  }
   return (
-    <>
-      {passage.slice(0, match.index)}
-      <mark className="bg-amber-100 text-gray-900 dark:bg-amber-300/15 dark:text-zinc-100 rounded-sm">
-        {match[0]}
-      </mark>
-      {passage.slice(end)}
-    </>
+    <div className="space-y-3">
+      {paragraphs
+        .filter((para) => para.some((piece) => piece.text.trim()))
+        .map((para, i) => (
+          <p key={i} className="whitespace-pre-line">
+            {para.map((piece, j) =>
+              piece.marked ? (
+                <mark
+                  key={j}
+                  className="bg-amber-100 text-gray-900 dark:bg-amber-300/15 dark:text-zinc-100 rounded-sm"
+                >
+                  {piece.text}
+                </mark>
+              ) : (
+                <Fragment key={j}>{piece.text}</Fragment>
+              ),
+            )}
+          </p>
+        ))}
+    </div>
   );
 }
 
@@ -716,7 +751,10 @@ export default function App() {
                     {sources.map((source, idx) => {
                       const book = bookInfo(source.filename, source.author);
                       const label = formatSectionLabel(source.section_label, source.filename);
-                      const excerpt = trimExcerpt(source.excerpt ?? source.text);
+                      // Shown as it appears in the passage, so verse keeps its line breaks
+                      const excerpt = trimExcerpt(
+                        findExcerpt(source.text, source.excerpt)?.[0] ?? source.excerpt ?? source.text,
+                      );
                       const canExpand = excerpt !== source.text;
                       return (
                         <li
@@ -731,7 +769,7 @@ export default function App() {
                             <span className="mt-0.5 w-6 h-6 shrink-0 rounded bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 text-xs font-medium flex items-center justify-center">
                               {idx + 1}
                             </span>
-                            <div className="flex-1 min-w-0 space-y-2">
+                            <div className="flex-1 min-w-0 space-y-3">
                               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                 <BookCover book={book} size="sm" />
                                 <span className="text-sm font-medium text-gray-900 dark:text-zinc-100 wrap-anywhere">
@@ -751,13 +789,13 @@ export default function App() {
                                   </span>
                                 )}
                               </div>
-                              <p className="font-serif text-[15px] leading-7 text-gray-700 dark:text-zinc-300 whitespace-pre-line">
+                              <div className="font-serif text-[15px] leading-7 text-gray-700 dark:text-zinc-300">
                                 {expandedPassages.has(idx) ? (
-                                  <PassageWithExcerpt passage={source.text} excerpt={source.excerpt} />
+                                  <PassageText text={source.text} excerpt={source.excerpt} />
                                 ) : (
-                                  excerpt
+                                  <PassageText text={excerpt} />
                                 )}
-                              </p>
+                              </div>
                               {canExpand && (
                                 <button
                                   type="button"

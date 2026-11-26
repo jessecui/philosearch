@@ -541,6 +541,7 @@ async def index_document(file: UploadFile = File(...)):
             paragraph_indices=paragraph_indices,
             embeddings=embeddings,
             paragraph_labels=parsed.paragraph_labels,
+            paragraph_texts=parsed.paragraph_texts,
         )
 
         if not success:
@@ -644,6 +645,7 @@ async def index_document_distributed(file: UploadFile = File(...)):
             paragraph_indices=paragraph_indices,
             embeddings=embeddings,
             paragraph_labels=parsed.paragraph_labels,
+            paragraph_texts=parsed.paragraph_texts,
         )
         index_time = time.time() - index_start
 

@@ -334,6 +334,7 @@ class VectorStore:
         embeddings: List[List[float]],
         author: Optional[str] = None,
         paragraph_labels: Optional[Dict[int, str]] = None,
+        paragraph_texts: Optional[Dict[int, str]] = None,
     ) -> bool:
         """
         Index a document with its sentences and embeddings.
@@ -348,6 +349,9 @@ class VectorStore:
             author: Author name (optional)
             paragraph_labels: Section label per paragraph index, e.g.
                 {12: "Book 2, §3"} (optional)
+            paragraph_texts: Display text per paragraph index, with its line
+                breaks (optional; otherwise the paragraph's sentences joined
+                by spaces)
 
         Returns:
             True if successful
@@ -384,14 +388,15 @@ class VectorStore:
         )
 
         # Build paragraph cache (group sentences by paragraph)
-        paragraph_texts: Dict[int, List[str]] = {}
+        paragraph_sentences: Dict[int, List[str]] = {}
         for sent, para_idx in zip(sentences, paragraph_indices):
-            if para_idx not in paragraph_texts:
-                paragraph_texts[para_idx] = []
-            paragraph_texts[para_idx].append(sent)
+            paragraph_sentences.setdefault(para_idx, []).append(sent)
 
-        for para_idx, para_sentences in paragraph_texts.items():
-            self.paragraph_cache[(doc_id, para_idx)] = " ".join(para_sentences)
+        display_texts = paragraph_texts or {}
+        for para_idx, para_sentences in paragraph_sentences.items():
+            self.paragraph_cache[(doc_id, para_idx)] = display_texts.get(
+                para_idx
+            ) or " ".join(para_sentences)
         for para_idx, label in (paragraph_labels or {}).items():
             self.paragraph_labels[(doc_id, para_idx)] = label
 

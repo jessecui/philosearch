@@ -108,11 +108,13 @@ class DocumentProcessor:
         - Short fragments (epigraphs, verse lines, "And this third:") are joined
           to the previous passage in the same section instead of standing alone.
         - Stanzas of a numbered chapter are kept together as one passage.
+        - Each passage's display text keeps its line breaks (verse) and puts a
+          blank line between the paragraphs it joins.
 
         Returns:
-            ParsedDocument with sentences, a passage index per sentence, and a
+            ParsedDocument with sentences, a passage index per sentence, a
             label per passage (e.g. "Book 6, §49"; absent when the text has no
-            detectable structure)
+            detectable structure) and each passage's display text
         """
         if not text or not text.strip():
             return ParsedDocument([], [], {})
@@ -231,6 +233,9 @@ class DocumentProcessor:
                     continue
 
             words = len(body.split())
+            # The passage as shown to readers: verse keeps its line breaks, while
+            # hard-wrapped prose is unwrapped into one paragraph
+            display = re.sub(r"\s*\n\s*", " ", body) if _is_wrapped_prose(lines) else body
             prev = passages[-1] if passages else None
             same_section = prev is not None and prev["label"] == label()
             fits = prev is not None and prev["words"] + words <= MAX_PASSAGE_WORDS
@@ -257,6 +262,7 @@ class DocumentProcessor:
 
             if joins_previous:
                 prev["parts"].append(body)
+                prev["display"].append(display)
                 prev["words"] += words
                 prev["wrapped"] = prev["wrapped"] or line_mode or _is_wrapped_prose(lines)
             else:
@@ -264,6 +270,7 @@ class DocumentProcessor:
                     {
                         "label": label(),
                         "parts": [body],
+                        "display": [display],
                         "words": words,
                         "wrapped": line_mode or _is_wrapped_prose(lines),
                     }
@@ -272,6 +279,7 @@ class DocumentProcessor:
         sentences: List[str] = []
         paragraph_indices: List[int] = []
         paragraph_labels: Dict[int, str] = {}
+        paragraph_texts: Dict[int, str] = {}
         current_para_idx = 0
 
         for passage in passages:
@@ -315,9 +323,15 @@ class DocumentProcessor:
             if added:
                 if passage["label"]:
                     paragraph_labels[current_para_idx] = passage["label"]
+                # Paragraphs of a passage are separated by a blank line. Passages
+                # split at sentence boundaries, and line-mode text, have no
+                # breaks of the author's to keep; their text is rebuilt from
+                # the sentences.
+                if not (split_long or line_mode):
+                    paragraph_texts[current_para_idx] = "\n\n".join(passage["display"])
                 current_para_idx += 1
 
-        return ParsedDocument(sentences, paragraph_indices, paragraph_labels)
+        return ParsedDocument(sentences, paragraph_indices, paragraph_labels, paragraph_texts)
 
 
 # --- Structure detection -----------------------------------------------------
@@ -372,6 +386,9 @@ class ParsedDocument:
     sentences: List[str]
     paragraph_indices: List[int]
     paragraph_labels: Dict[int, str] = field(default_factory=dict)
+    # Passage text with its line and paragraph breaks, for display; passages
+    # missing here are shown as their sentences joined by spaces
+    paragraph_texts: Dict[int, str] = field(default_factory=dict)
 
 
 def _is_heading_line(

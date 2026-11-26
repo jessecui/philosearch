@@ -172,6 +172,7 @@ def index_texts_directory(
                 paragraph_indices=paragraph_indices,
                 author=author,
                 paragraph_labels=parsed.paragraph_labels,
+                paragraph_texts=parsed.paragraph_texts,
             )
             index_time = time.time() - index_start
             total_indexing_time += index_time
