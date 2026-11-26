@@ -391,6 +391,8 @@ The texts and the index built from them are listed in `.gitignore` so they stay 
 
 **Deploying:** an image built from a clean checkout has no texts or index, so the library starts empty. Supply the texts at build time and run `python -m app.scripts.index_texts` before starting the server.
 
+Behind a reverse proxy, set the `FORWARDED_ALLOW_IPS` environment variable (read by uvicorn) to the proxy's address. Otherwise every visitor appears to come from the proxy, and the limit on wrong creator-name answers (10 per 15 minutes per address) is shared by everyone.
+
 ---
 
 ## Technical Details

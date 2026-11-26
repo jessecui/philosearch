@@ -3,6 +3,7 @@ import functools
 import numpy as np
 import json
 import os
+import shutil
 import threading
 import time
 from typing import List, Dict, Tuple, Optional, TYPE_CHECKING
@@ -155,13 +156,13 @@ class VectorStore:
             self.paragraph_cache = {
                 (parts[0], int(parts[1])): v
                 for k, v in data["paragraph_cache"].items()
-                if (parts := k.split("::"))
+                if (parts := k.rsplit("::", 1))
             }
             # Older indexes have no labels; citations then show no section
             self.paragraph_labels = {
                 (parts[0], int(parts[1])): v
                 for k, v in data.get("paragraph_labels", {}).items()
-                if (parts := k.split("::"))
+                if (parts := k.rsplit("::", 1))
             }
 
     def _rebuild_paragraph_lookup(self):
@@ -234,8 +235,9 @@ class VectorStore:
         """
         All excerpt windows worth scoring for a match: every run of up to
         EXCERPT_MAX_SENTENCES consecutive sentences in the same passage that
-        contains the matched sentence and fits EXCERPT_CHAR_BUDGET, keeping only
-        the largest ones (a window inside another candidate is dropped).
+        contains the matched sentence and fits EXCERPT_CHAR_BUDGET, of the
+        largest size that fits at all: if any 3-sentence window fits, only
+        3-sentence windows are offered; otherwise 2, otherwise the sentence alone.
 
         The matched sentence is often a conclusion ("Thus it is like the Tao.")
         whose key point sits two sentences earlier, so offering the reranker the
@@ -308,8 +310,10 @@ class VectorStore:
         files first; only when both writes succeed are they renamed into
         place, back to back, so a failed write (e.g. disk full) leaves the
         previous pair untouched. If the metadata rename fails after the index
-        rename, the previous index is put back, so the pair on disk always
-        matches.
+        rename, the previous index is put back. Only a crash between the two
+        renames can leave a mismatched pair; startup then trims extra vectors
+        after an add, or stops with an "out of sync" error after a delete
+        (rebuild with `python -m app.scripts.index_texts`).
         """
         index_tmp = f"{self.index_path}.tmp"
         metadata_tmp = f"{self.metadata_path}.tmp"
@@ -322,13 +326,17 @@ class VectorStore:
                 if os.path.exists(tmp):
                     os.remove(tmp)
             raise
-        # A second name for the previous index, which stays in place
         had_index = os.path.exists(self.index_path)
-        if had_index:
-            if os.path.exists(index_backup):
-                os.remove(index_backup)
-            os.link(self.index_path, index_backup)
         try:
+            # A second copy of the previous index, which stays in place: a hard
+            # link where the filesystem allows it, otherwise a real copy
+            if had_index:
+                if os.path.exists(index_backup):
+                    os.remove(index_backup)
+                try:
+                    os.link(self.index_path, index_backup)
+                except OSError:
+                    shutil.copy2(self.index_path, index_backup)
             os.replace(index_tmp, self.index_path)
             try:
                 os.replace(metadata_tmp, self.metadata_path)

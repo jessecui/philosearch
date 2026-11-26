@@ -349,7 +349,8 @@ class ResultItem(BaseModel):
     paragraph_text: str = Field(max_length=50_000)
     excerpt_text: Optional[str] = Field(default=None, max_length=5_000)
     section_label: Optional[str] = Field(default=None, max_length=300)
-    reranking_score: Optional[float] = None
+    # NaN or infinity would make the SSE sources event invalid JSON
+    reranking_score: Optional[float] = Field(default=None, allow_inf_nan=False)
     context_paragraphs_before: Optional[list[str]] = None
     context_paragraphs_after: Optional[list[str]] = None
 
@@ -387,13 +388,30 @@ class ValidateCreatorRequest(BaseModel):
 
 
 # The creator's name works as a password, and names are easy to guess, so
-# wrong answers are limited per client address
+# wrong answers are limited per client address. Behind a reverse proxy, set
+# uvicorn's FORWARDED_ALLOW_IPS to the proxy's address so each visitor is
+# counted separately rather than all sharing the proxy's address.
 MAX_FAILED_ANSWERS = 10
 FAILED_ANSWER_WINDOW_SECONDS = 15 * 60
 _failed_answers: dict[str, list[float]] = {}
 
 
+# Addresses tracked before stale entries are swept, so many one-off
+# addresses can't grow the table without bound
+MAX_TRACKED_CLIENTS = 10_000
+
+
 def _recent_failures(client: str, now: float) -> list[float]:
+    if len(_failed_answers) > MAX_TRACKED_CLIENTS:
+        for address in list(_failed_answers):
+            _failed_answers[address] = [
+                t for t in _failed_answers[address] if now - t < FAILED_ANSWER_WINDOW_SECONDS
+            ]
+            if not _failed_answers[address]:
+                del _failed_answers[address]
+        # Still full of recent failures: forget the oldest addresses first
+        while len(_failed_answers) > MAX_TRACKED_CLIENTS:
+            del _failed_answers[next(iter(_failed_answers))]
     recent = [t for t in _failed_answers.get(client, []) if now - t < FAILED_ANSWER_WINDOW_SECONDS]
     if recent:
         _failed_answers[client] = recent
