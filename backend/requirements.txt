@@ -4,6 +4,7 @@ python-multipart>=0.0.18
 torch>=2.0.0
 transformers>=4.36.0
 sentence-transformers>=2.3.0
+huggingface_hub>=0.23.0
 nltk>=3.9
 faiss-cpu>=1.7.4
 ray[default]>=2.8.0
