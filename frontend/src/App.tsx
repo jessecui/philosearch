@@ -651,7 +651,8 @@ export default function App() {
                       placeholder="e.g. What makes a life well lived?"
                       className={cn(
                         "w-full h-10 pl-9 pr-3 rounded-md border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-900",
-                        "text-sm text-gray-900 dark:text-zinc-100 placeholder:text-gray-500 dark:placeholder:text-zinc-400",
+                        // 16px on phones: iOS Safari zooms the page when a field with smaller text is focused
+                        "text-base sm:text-sm text-gray-900 dark:text-zinc-100 placeholder:text-gray-500 dark:placeholder:text-zinc-400",
                         "focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20",
                         "disabled:bg-gray-50 dark:disabled:bg-zinc-800 disabled:text-gray-500",
                       )}
