@@ -8,23 +8,15 @@ from fastapi import (
     File,
     UploadFile,
     HTTPException,
-    Cookie,
     Depends,
     Header,
-    Request,
-    Response,
 )
 from fastapi.concurrency import run_in_threadpool
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-import hashlib
 import hmac
-import ipaddress
 import logging
 import os
-import re
-import secrets
 import uuid
 import json
 from pathlib import Path
@@ -37,6 +29,7 @@ from app.services.vector_store import VectorStore
 from app.services.distributed_ingestion import DistributedIngestionPipeline
 from app.services.reranker_service import CrossEncoderReranker
 from app.services.generation_service import GeminiGenerator
+from app.auth import Gate
 import time
 
 # Project paths
@@ -48,22 +41,6 @@ app = FastAPI(
     docs_url=None,  # Disable /docs
     redoc_url=None,  # Disable /redoc
     openapi_url=None,  # Disable /openapi.json
-)
-
-# CORS: only needed when the frontend is served from a different origin than
-# the API. In production the API serves the frontend itself, and in development
-# the Vite proxy keeps requests same-origin, so the default list is minimal.
-ALLOWED_ORIGINS = [
-    o.strip()
-    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
-    if o.strip()
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Content-Type", "X-Admin-Token"],
 )
 
 logger = logging.getLogger("philosearch")
@@ -92,52 +69,11 @@ reranker = CrossEncoderReranker()  # Initialize reranker for 2-stage retrieval
 
 # --- Auth ---
 
-# Session cookie issued by /validate-creator. It is HttpOnly and signed, so it
-# cannot be forged or set from the browser; the frontend's own "creator_auth"
-# cookie is only a hint for whether to show the access prompt.
-SESSION_COOKIE = "philosearch_session"
-SESSION_TTL_SECONDS = 24 * 60 * 60
-
-
-def _session_secret() -> bytes:
-    """
-    Key for signing session cookies. AUTH_SECRET if set; otherwise derived from
-    the server's own secrets so sessions survive restarts; otherwise random
-    (sessions then reset when the server restarts).
-    """
-    explicit = os.getenv("AUTH_SECRET")
-    if explicit:
-        return explicit.encode()
-    creator = os.getenv("CREATOR_NAME", "")
-    api_key = os.getenv("GOOGLE_API_KEY", "")
-    if creator and api_key:
-        return hashlib.sha256(f"philosearch-session|{creator}|{api_key}".encode()).digest()
-    return secrets.token_bytes(32)
-
-
-SESSION_SECRET = _session_secret()
-
-
-def _sign(expires_at: int) -> str:
-    return hmac.new(SESSION_SECRET, str(expires_at).encode(), hashlib.sha256).hexdigest()
-
-
-def _new_session_token() -> str:
-    expires_at = int(time.time()) + SESSION_TTL_SECONDS
-    return f"{expires_at}.{_sign(expires_at)}"
-
-
-_SESSION_TOKEN = re.compile(r"(\d{1,12})\.([0-9a-f]{64})")
-
-
-def _session_is_valid(token: Optional[str]) -> bool:
-    match = _SESSION_TOKEN.fullmatch(token or "")
-    if not match:
-        return False
-    expires_at = int(match.group(1))
-    if expires_at < time.time():
-        return False
-    return hmac.compare_digest(match.group(2).encode(), _sign(expires_at).encode())
+# The sign-in gate (auth.py): POST /login and GET /me, the same in Attune and
+# MentorML. The signing key is derived from the creator's name and the Gemini
+# API key unless AUTH_SECRET is set.
+gate = Gate("philosearch", key_source=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", ""))
+app.include_router(gate.router)
 
 
 def _admin_token_is_valid(supplied: Optional[str]) -> bool:
@@ -151,14 +87,6 @@ def _admin_token_is_valid(supplied: Optional[str]) -> bool:
     except UnicodeEncodeError:
         supplied_bytes = supplied.encode("utf-8")
     return hmac.compare_digest(supplied_bytes, admin_token.encode("utf-8"))
-
-
-async def require_auth(
-    philosearch_session: str | None = Cookie(default=None),
-):
-    """Require a valid session cookie (issued by /validate-creator)."""
-    if not _session_is_valid(philosearch_session):
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 async def require_admin(x_admin_token: str | None = Header(default=None)):
@@ -328,7 +256,7 @@ try:
 except Exception as e:
     print(f"⚠️  Gemini generator not initialized: {e}")
     print("   RAG generation endpoints will not be available.")
-    print("   Set GOOGLE_API_KEY in .env to enable generation features.")
+    print("   Set GEMINI_API_KEY in .env to enable generation features.")
     generator = None
 
 # Create uploads directory if it doesn't exist
@@ -404,135 +332,6 @@ async def health():
 # Streamed answers must reach the browser token by token: no caching, and no
 # buffering by reverse proxies such as nginx
 SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-
-
-class ValidateCreatorRequest(BaseModel):
-    answer: str = Field(max_length=200)
-
-
-# The creator's name works as a password, and names are easy to guess, so
-# wrong answers are limited per client address (see _client_address).
-MAX_FAILED_ANSWERS = 10
-FAILED_ANSWER_WINDOW_SECONDS = 15 * 60
-_failed_answers: dict[str, list[float]] = {}
-
-
-# Addresses tracked before stale entries are swept, so many one-off
-# addresses can't grow the table without bound
-MAX_TRACKED_CLIENTS = 10_000
-
-
-# A request header that the hosting platform's proxy sets to the visitor's
-# address, replacing any copy the visitor sent (on Railway, X-Real-IP).
-# Unset when the app is reached directly.
-CLIENT_IP_HEADER = os.getenv("CLIENT_IP_HEADER", "").strip().lower()
-
-
-def _normalize_address(value: str) -> str:
-    """
-    An address without any port, in canonical form: some proxies write
-    "ip:port", and a port that changes with every connection would otherwise
-    make every attempt look like a new visitor.
-    """
-    if value.startswith("[") and "]" in value:  # "[2001:db8::1]:443"
-        value = value[1 : value.index("]")]
-    elif value.count(":") == 1:  # "203.0.113.5:443"
-        value = value.split(":")[0]
-    try:
-        return str(ipaddress.ip_address(value))
-    except ValueError:
-        return value
-
-
-def _client_address(request: Request) -> str:
-    """
-    The visitor's address, for counting wrong answers.
-
-    With CLIENT_IP_HEADER set and present, it is that header's value. This is
-    safe only if the proxy overwrites the header and the app can't be reached
-    except through the proxy; otherwise a visitor could send a made-up address
-    with each attempt. X-Forwarded-For isn't used because platforms differ in
-    how many entries they add, and uvicorn's FORWARDED_ALLOW_IPS='*' takes its
-    leftmost entry, which the visitor writes. Without the header, it is the
-    client address uvicorn reports: the connecting address, which behind a
-    proxy is the proxy's and so is shared by every visitor.
-    """
-    if CLIENT_IP_HEADER:
-        values = request.headers.getlist(CLIENT_IP_HEADER)
-        # A single address is expected; if a proxy appended to a list, its
-        # entry is the last one
-        address = values[-1].split(",")[-1].strip() if values else ""
-        if address:
-            return _normalize_address(address)
-    return request.client.host if request.client else "unknown"
-
-
-def _recent_failures(client: str, now: float) -> list[float]:
-    if len(_failed_answers) > MAX_TRACKED_CLIENTS:
-        for address in list(_failed_answers):
-            _failed_answers[address] = [
-                t for t in _failed_answers[address] if now - t < FAILED_ANSWER_WINDOW_SECONDS
-            ]
-            if not _failed_answers[address]:
-                del _failed_answers[address]
-        # Still full of recent failures: forget the oldest addresses first
-        while len(_failed_answers) > MAX_TRACKED_CLIENTS:
-            del _failed_answers[next(iter(_failed_answers))]
-    # Re-inserted rather than updated in place, so the dict stays ordered by
-    # each address's latest attempt and the sweep above drops the stalest first
-    recent = [t for t in _failed_answers.pop(client, []) if now - t < FAILED_ANSWER_WINDOW_SECONDS]
-    if recent:
-        _failed_answers[client] = recent
-    return recent
-
-
-@app.post("/validate-creator")
-async def validate_creator(
-    request: ValidateCreatorRequest, http_request: Request, response: Response
-):
-    """
-    Validate the creator's name against the stored environment variable and,
-    if it matches, issue the signed session cookie that protected endpoints check.
-
-    Args:
-        answer: The user's answer to the creator question
-
-    Returns:
-        {"valid": true/false}; 429 after MAX_FAILED_ANSWERS wrong answers from
-        one address within FAILED_ANSWER_WINDOW_SECONDS
-    """
-    creator_name = os.getenv("CREATOR_NAME", "").strip().replace(" ", "").lower()
-    user_answer = request.answer.strip().replace(" ", "").lower()
-
-    if not creator_name:
-        raise HTTPException(
-            status_code=500, detail="CREATOR_NAME environment variable not configured"
-        )
-
-    client = _client_address(http_request)
-    now = time.time()
-    if len(_recent_failures(client, now)) >= MAX_FAILED_ANSWERS:
-        raise HTTPException(
-            status_code=429, detail="Too many attempts. Please try again later."
-        )
-
-    valid = hmac.compare_digest(user_answer.encode(), creator_name.encode())
-    if not valid:
-        # Appended at the end of the dict's order (newest failure last)
-        _failed_answers[client] = _failed_answers.pop(client, []) + [now]
-    if valid:
-        # A successful sign-in clears this visitor's earlier typos
-        _failed_answers.pop(client, None)
-        forwarded_proto = http_request.headers.get("x-forwarded-proto", "")
-        response.set_cookie(
-            SESSION_COOKIE,
-            _new_session_token(),
-            max_age=SESSION_TTL_SECONDS,
-            httponly=True,
-            samesite="lax",
-            secure=http_request.url.scheme == "https" or forwarded_proto == "https",
-        )
-    return {"valid": valid}
 
 
 @app.post("/embed", dependencies=[Depends(require_admin)])
@@ -808,7 +607,7 @@ async def index_document_distributed(file: UploadFile = File(...)):
             os.remove(file_path)
 
 
-@app.post("/search")
+@app.post("/search", dependencies=[Depends(gate.require)])
 async def search_documents(request: SearchRequest):
     """
     Search indexed documents for semantically similar passages.
@@ -1006,7 +805,7 @@ async def get_stats():
         raise _internal_error(e)
 
 
-@app.post("/generate", dependencies=[Depends(require_auth)])
+@app.post("/generate", dependencies=[Depends(gate.require)])
 async def generate_from_results(request: GenerateFromResultsRequest):
     """
     Generate an answer from pre-fetched search results.
@@ -1030,7 +829,7 @@ async def generate_from_results(request: GenerateFromResultsRequest):
     if generator is None:
         raise HTTPException(
             status_code=503,
-            detail="RAG generation not available. Set GOOGLE_API_KEY in backend/.env "
+            detail="RAG generation not available. Set GEMINI_API_KEY in backend/.env "
             "and restart the server.",
         )
 
@@ -1107,7 +906,7 @@ async def generate_from_results(request: GenerateFromResultsRequest):
         raise _internal_error(e)
 
 
-@app.post("/search-and-generate", dependencies=[Depends(require_auth)])
+@app.post("/search-and-generate", dependencies=[Depends(gate.require)])
 async def search_and_generate(request: GenerateRequest):
     """
     Retrieve relevant document excerpts and generate an answer using Gemini 3.8 Flash.
@@ -1135,7 +934,7 @@ async def search_and_generate(request: GenerateRequest):
     if generator is None:
         raise HTTPException(
             status_code=503,
-            detail="RAG generation not available. Set GOOGLE_API_KEY in backend/.env "
+            detail="RAG generation not available. Set GEMINI_API_KEY in backend/.env "
             "and restart the server.",
         )
     _require_known_doc_ids(request.doc_ids)

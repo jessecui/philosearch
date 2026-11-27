@@ -1,4 +1,3 @@
-import Cookies from "js-cookie";
 import { AlertCircle, ChevronDown, Loader2, Moon, Search, Sun } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
@@ -130,9 +129,14 @@ function PassageText({ text, excerpt }: { text: string; excerpt?: string | null 
 }
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(
-    () => Cookies.get("creator_auth") === "true",
-  );
+  // null while the server is being asked; the access prompt shows only once it says no
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  useEffect(() => {
+    fetch(`${API_BASE}/me`)
+      .then((response) => response.json())
+      .then((me) => setIsAuthenticated(me.signed_in === true))
+      .catch(() => setIsAuthenticated(false));
+  }, []);
   const { theme, toggleTheme } = useTheme();
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -459,7 +463,6 @@ export default function App() {
 
       if (response.status === 401) {
         // Access cookie expired: show the access prompt again
-        Cookies.remove("creator_auth");
         setIsAuthenticated(false);
         throw new Error("Your session expired. Please verify access again.");
       }
@@ -557,7 +560,7 @@ export default function App() {
 
   return (
     <>
-      {!isAuthenticated && <AuthModal onAuthenticated={handleAuthenticated} />}
+      {isAuthenticated === false && <AuthModal onAuthenticated={handleAuthenticated} />}
       <div className="min-h-screen bg-[#f6f7f9] dark:bg-zinc-950 text-gray-800 dark:text-zinc-200">
         {/* Top bar */}
         <header className="bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800">

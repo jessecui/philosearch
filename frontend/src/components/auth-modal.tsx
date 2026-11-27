@@ -7,7 +7,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import Cookies from "js-cookie";
 
 import { LogoMark } from "@/components/logo-mark";
 import { API_BASE, errorMessage } from "@/lib/api";
@@ -35,7 +34,7 @@ export function AuthModal({ onAuthenticated }: AuthModalProps) {
 
     let response: Response;
     try {
-      response = await fetch(`${API_BASE}/validate-creator`, {
+      response = await fetch(`${API_BASE}/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -48,27 +47,15 @@ export function AuthModal({ onAuthenticated }: AuthModalProps) {
       return;
     }
 
-    try {
-      if (!response.ok) {
-        throw new Error(await errorMessage(response));
-      }
-
-      const data = await response.json();
-
-      if (data.valid) {
-        // UI hint only, so the prompt isn't shown again on reload. Access is
-        // checked by the server's HttpOnly session cookie set in this response.
-        Cookies.set("creator_auth", "true", { expires: 1 });
-        onAuthenticated();
-      } else {
-        setError("That name doesn't match our records. Please try again.");
-        setAnswer("");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setIsLoading(false);
+    if (response.ok) {
+      // The server set its HttpOnly session cookie in this response
+      onAuthenticated();
+    } else {
+      // A wrong name (401), too many attempts (429) or a server problem: show the server's message
+      setError(await errorMessage(response));
+      if (response.status === 401) setAnswer("");
     }
+    setIsLoading(false);
   };
 
   return (
