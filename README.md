@@ -113,6 +113,8 @@ CREATOR_NAME=your-name                  # the name the access prompt asks for
 # AUTH_SECRET=...            # signs session cookies (derived from the two above if unset)
 # ADMIN_TOKEN=...            # enables upload/delete endpoints (disabled if unset)
 # MAX_UPLOAD_MB=50           # upload size limit for those endpoints, per file (MiB)
+# INDEX_REPO=you/your-index  # private Hugging Face dataset a deployment downloads the index from (see Deploying)
+# HF_TOKEN=hf_...            # access token for INDEX_REPO
 # ENABLE_RAY=true            # enables /index-distributed
 ```
 
@@ -356,12 +358,14 @@ philosearch/
 │   │   │   ├── embedding_service.py    # Sentence embeddings
 │   │   │   ├── reranker_service.py     # Cross-encoder reranking
 │   │   │   ├── vector_store.py         # FAISS vector store
+│   │   │   ├── index_sync.py           # Download / upload the index (private Hugging Face repo)
 │   │   │   ├── generation_service.py   # Gemini 3.8 Flash generation
 │   │   │   └── distributed_ingestion.py # Ray parallel processing
 │   │   ├── utils/
 │   │   │   └── document_processor.py   # Text extraction & splitting
 │   │   ├── scripts/
 │   │   │   ├── index_texts.py          # Build FAISS index from texts/
+│   │   │   ├── upload_index.py         # Upload the built index for deployments
 │   │   │   ├── test_search.py          # Test retrieval pipeline
 │   │   │   └── test_search_and_generate.py # Test RAG pipeline
 │   │   └── evaluation/
@@ -400,7 +404,15 @@ The library in `backend/texts/` (filenames are `Title__Author_Name.txt`):
 
 The texts and the index built from them are listed in `.gitignore` so they stay local. The Aristotle text was converted from the Standard Ebooks edition with front matter and endnotes removed. To add a book, save it in `backend/texts/` as plain text with blank lines between paragraphs (MD, PDF and DOCX also work), run `python -m app.scripts.index_texts`, and add its display details to `frontend/src/lib/books.ts`. Rebuilding keeps documents uploaded through the API: they are copied over from the current index (re-embedded if `faiss.index` is missing or damaged). If `metadata.json` itself can't be read, the rebuild stops and keeps the previous index; pass `--drop-uploads` to rebuild without the uploads.
 
-**Deploying:** the Dockerfile copies `backend/` as it is and starts the server; it doesn't build an index. An image built from a clean checkout therefore has no texts or index, and the library starts empty. Run `python -m app.scripts.index_texts` locally first, so `backend/data/` is copied into the image, or mount a volume at `/app/backend/data` that holds a built index. An index built inside a running container without a volume is lost when the container is recreated.
+**Deploying:** the Dockerfile copies `backend/` as it is and starts the server; it doesn't build an index. An image built from a clean checkout, such as a deployment from GitHub, therefore has no texts or index. To give it one, keep the built index in a private [Hugging Face dataset](https://huggingface.co/new-dataset) repo:
+
+1. Build the index locally with `python -m app.scripts.index_texts`.
+2. Set `INDEX_REPO` (for example `your-name/philosearch-index`) and an `HF_TOKEN` with write access in `backend/.env`, then run `python -m app.scripts.upload_index`. It creates the repo as private if it doesn't exist, and refuses to upload to a public one, because the index contains the full text of every passage.
+3. On the host, set `INDEX_REPO` and an `HF_TOKEN` with read access to that repo.
+
+A server that starts with `INDEX_REPO` set and no index downloads it (about 25 MB for the eight texts) before it starts serving; if the download fails, it doesn't start. An index that is already there is never replaced, so after rebuilding and uploading, redeploy to get a fresh container. If you mount a volume at `/app/backend/data`, the index and any documents uploaded through the API survive redeploys, but so does an old index: delete its two files from the volume to fetch the new one. Without a volume, documents uploaded through the API are lost when the container is recreated.
+
+Alternatives: build the image where the index is (`backend/data/` is copied into it), or mount a volume that already holds a built index.
 
 The sign-in gate is in `backend/app/auth.py`. Ten wrong creator-name answers from one address within 15 minutes lock that address out until the window passes. On Railway the visitor's address is read from the `X-Real-IP` header its proxy sets, so each visitor is counted separately; nothing needs configuring. Anywhere else the connecting address is used. Its tests run with `cd backend/app && python -m unittest test_auth`.
 

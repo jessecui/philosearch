@@ -26,6 +26,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.services.embedding_service import EmbeddingService
 from app.utils.document_processor import DocumentExtractionError, DocumentProcessor
 from app.services.vector_store import VectorStore
+from app.services.index_sync import download_index_if_missing
 from app.services.distributed_ingestion import DistributedIngestionPipeline
 from app.services.reranker_service import CrossEncoderReranker
 from app.services.generation_service import GeminiGenerator
@@ -61,6 +62,10 @@ def _internal_error(e: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail="Internal server error. Please try again.")
 
 # Initialize services
+# A deployment built from the repository has no index; fetch it if INDEX_REPO
+# is set. First, so a bad HF_TOKEN is reported here rather than as a failed
+# model download.
+download_index_if_missing()
 embedding_service = EmbeddingService()
 document_processor = DocumentProcessor()
 vector_store = VectorStore()
