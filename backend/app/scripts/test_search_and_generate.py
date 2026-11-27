@@ -64,7 +64,7 @@ async def test_search_and_generate(
     embedding_service = EmbeddingService()
     reranker = CrossEncoderReranker()
 
-    # Initialize generator (fails if GOOGLE_API_KEY is not set)
+    # Initialize generator (fails if GEMINI_API_KEY is not set)
     try:
         generator = GeminiGenerator(
             temperature=temperature, max_output_tokens=max_output_tokens
@@ -72,7 +72,7 @@ async def test_search_and_generate(
     except Exception as e:
         print(f"\n❌ Error initializing Gemini generator: {e}")
         print("\nTo use generation features:")
-        print("1. Set GOOGLE_API_KEY in backend/.env")
+        print("1. Set GEMINI_API_KEY in backend/.env")
         print("2. See backend/.env.example for configuration")
         return
 

@@ -38,11 +38,12 @@ class GeminiGenerator:
             max_output_tokens: Maximum tokens in response (default: 8192)
         """
         # Load API key from environment
-        api_key = os.getenv("GOOGLE_API_KEY")
+        # GOOGLE_API_KEY is the older name for the same key and still works
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
         if not api_key:
             raise ValueError(
-                "GOOGLE_API_KEY environment variable must be set. "
+                "GEMINI_API_KEY environment variable must be set. "
                 "Get your API key from https://aistudio.google.com/apikey"
             )
 
